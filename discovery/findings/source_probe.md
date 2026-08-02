@@ -4,15 +4,26 @@
 > from a live response, not taken from documentation.
 
 - **Source:** `https://api.jolpi.ca/ergast/f1`
-- **Probed at:** 2026-08-02T05:15:12+00:00
+- **Probed at:** 2026-08-02T13:22:17+00:00
 - **Probe season / round:** 2024 / 1
 
 ## Endpoint inventory
 
 | Endpoint | Status | Grain record path | Rows | Reported total | Max per call | Offset works |
 |---|---|---|---|---|---|---|
+| `seasons` | ✅ 200 | `MRData.SeasonTable.Seasons` | 77 | 77 | 100 | ✅ |
+| `circuits` | ✅ 200 | `MRData.CircuitTable.Circuits` | 78 | 78 | 100 | ✅ |
+| `races` | ✅ 200 | `MRData.RaceTable.Races` | 24 | 24 | 100 | ✅ |
+| `drivers` | ✅ 200 | `MRData.DriverTable.Drivers` | 25 | 25 | 100 | ✅ |
+| `constructors` | ✅ 200 | `MRData.ConstructorTable.Constructors` | 10 | 10 | 100 | ✅ |
 | `results` | ✅ 200 | `MRData.RaceTable.Races[].Results` | 100 | 479 | 100 | ✅ |
 | `qualifying` | ✅ 200 | `MRData.RaceTable.Races[].QualifyingResults` | 100 | 479 | 100 | ✅ |
+| `sprint` | ✅ 200 | `MRData.RaceTable.Races[].SprintResults` | 20 | 20 | 100 | ✅ |
+| `pitstops` | ✅ 200 | `MRData.RaceTable.Races[].PitStops` | 43 | 43 | 100 | ✅ |
+| `laps` | ✅ 200 | `MRData.RaceTable.Races[].Laps[].Timings` | 100 | 1129 | 100 | ✅ |
+| `driverstandings` | ✅ 200 | `MRData.StandingsTable.StandingsLists[].DriverStandings` | 20 | 20 | 100 | ✅ |
+| `constructorstandings` | ✅ 200 | `MRData.StandingsTable.StandingsLists[].ConstructorStandings` | 10 | 10 | 100 | ✅ |
+| `status` | ✅ 200 | `MRData.StatusTable.Status` | 100 | 136 | 100 | ✅ |
 
 ## Rate limiting
 
@@ -26,15 +37,129 @@ pacing plus `Retry-After` handling on 429.
 
 | Endpoint | Serves |
 |---|---|
+| `seasons` | §5 season context; the season dimension |
+| `circuits` | §5 circuit rollups; dim_circuit |
+| `races` | §5 dim_race (season, round, date) |
+| `drivers` | §2 dim_driver |
+| `constructors` | §2 dim_constructor (SCD2) |
 | `results` | §2 fct_results — the core fact |
 | `qualifying` | §3 grid vs finish |
+| `sprint` | §1 sprint points affect standings |
+| `pitstops` | §6 reliability; high-cardinality — cap |
+| `laps` | high-cardinality — measure before committing |
+| `driverstandings` | §1 fct_driver_standings |
+| `constructorstandings` | §1 fct_constructor_standings |
+| `status` | §6 retirement reasons; accepted_values / dim_status |
 
 ## Per-endpoint detail
+
+### `seasons`
+
+- URL: `https://api.jolpi.ca/ergast/f1/seasons.json`
+- Latency: 3167.9 ms (attempts: 1)
+- Envelope container: `MRData.SeasonTable.Seasons`
+- Grain record path: `MRData.SeasonTable.Seasons`
+- Nested lists found: `MRData.SeasonTable.Seasons` (77)
+- Pagination field types: `total` → string(numeric), `limit` → string(numeric), `offset` → string(numeric)
+
+**Needs casting at staging:**
+
+- `season (string(numeric))`
+
+**No nullable fields observed in this sample.**
+
+### `circuits`
+
+- URL: `https://api.jolpi.ca/ergast/f1/circuits.json`
+- Latency: 717.0 ms (attempts: 1)
+- Envelope container: `MRData.CircuitTable.Circuits`
+- Grain record path: `MRData.CircuitTable.Circuits`
+- Nested lists found: `MRData.CircuitTable.Circuits` (78)
+- Pagination field types: `total` → string(numeric), `limit` → string(numeric), `offset` → string(numeric)
+
+**Needs casting at staging:**
+
+- `Location.lat (string(numeric))`
+- `Location.long (string(numeric))`
+
+**No nullable fields observed in this sample.**
+
+### `races`
+
+- URL: `https://api.jolpi.ca/ergast/f1/2024/races.json`
+- Latency: 754.0 ms (attempts: 1)
+- Envelope container: `MRData.RaceTable.Races`
+- Grain record path: `MRData.RaceTable.Races`
+- Nested lists found: `MRData.RaceTable.Races` (24)
+- Pagination field types: `total` → string(numeric), `limit` → string(numeric), `offset` → string(numeric)
+
+**Needs casting at staging:**
+
+- `Circuit.Location.lat (string(numeric))`
+- `Circuit.Location.long (string(numeric))`
+- `FirstPractice.date (string(date))`
+- `FirstPractice.time (string(time))`
+- `Qualifying.date (string(date))`
+- `Qualifying.time (string(time))`
+- `SecondPractice.date (string(date))`
+- `SecondPractice.time (string(time))`
+- `Sprint.date (string(date))`
+- `Sprint.time (string(time))`
+- `SprintQualifying.date (string(date))`
+- `SprintQualifying.time (string(time))`
+- `ThirdPractice.date (string(date))`
+- `ThirdPractice.time (string(time))`
+- `date (string(date))`
+- `round (string(numeric))`
+- `season (string(numeric))`
+- `time (string(time))`
+
+**Nullable in practice — not eligible for a key:**
+
+- `SecondPractice (present in 75.0%, 0 null/empty)`
+- `SecondPractice.date (present in 75.0%, 0 null/empty)`
+- `SecondPractice.time (present in 75.0%, 0 null/empty)`
+- `Sprint (present in 25.0%, 0 null/empty)`
+- `Sprint.date (present in 25.0%, 0 null/empty)`
+- `Sprint.time (present in 25.0%, 0 null/empty)`
+- `SprintQualifying (present in 25.0%, 0 null/empty)`
+- `SprintQualifying.date (present in 25.0%, 0 null/empty)`
+- `SprintQualifying.time (present in 25.0%, 0 null/empty)`
+- `ThirdPractice (present in 75.0%, 0 null/empty)`
+- `ThirdPractice.date (present in 75.0%, 0 null/empty)`
+- `ThirdPractice.time (present in 75.0%, 0 null/empty)`
+
+### `drivers`
+
+- URL: `https://api.jolpi.ca/ergast/f1/2024/drivers.json`
+- Latency: 1089.1 ms (attempts: 1)
+- Envelope container: `MRData.DriverTable.Drivers`
+- Grain record path: `MRData.DriverTable.Drivers`
+- Nested lists found: `MRData.DriverTable.Drivers` (25)
+- Pagination field types: `total` → string(numeric), `limit` → string(numeric), `offset` → string(numeric)
+
+**Needs casting at staging:**
+
+- `dateOfBirth (string(date))`
+- `permanentNumber (string(numeric))`
+
+**No nullable fields observed in this sample.**
+
+### `constructors`
+
+- URL: `https://api.jolpi.ca/ergast/f1/2024/constructors.json`
+- Latency: 1675.5 ms (attempts: 1)
+- Envelope container: `MRData.ConstructorTable.Constructors`
+- Grain record path: `MRData.ConstructorTable.Constructors`
+- Nested lists found: `MRData.ConstructorTable.Constructors` (10)
+- Pagination field types: `total` → string(numeric), `limit` → string(numeric), `offset` → string(numeric)
+
+**No nullable fields observed in this sample.**
 
 ### `results`
 
 - URL: `https://api.jolpi.ca/ergast/f1/2024/results.json`
-- Latency: 920.5 ms (attempts: 1)
+- Latency: 3769.0 ms (attempts: 1)
 - Envelope container: `MRData.RaceTable.Races`
 - Grain record path: `MRData.RaceTable.Races[].Results`
 - Nested lists found: `MRData.RaceTable.Races` (6), `MRData.RaceTable.Races[].Results` (100)
@@ -73,7 +198,7 @@ pacing plus `Retry-After` handling on 429.
 ### `qualifying`
 
 - URL: `https://api.jolpi.ca/ergast/f1/2024/qualifying.json`
-- Latency: 841.1 ms (attempts: 1)
+- Latency: 3925.9 ms (attempts: 1)
 - Envelope container: `MRData.RaceTable.Races`
 - Grain record path: `MRData.RaceTable.Races[].QualifyingResults`
 - Nested lists found: `MRData.RaceTable.Races` (6), `MRData.RaceTable.Races[].QualifyingResults` (100)
@@ -91,6 +216,120 @@ pacing plus `Retry-After` handling on 429.
 - `Q1 (present in 100.0%, 1 null/empty)`
 - `Q2 (present in 76.0%, 1 null/empty)`
 - `Q3 (present in 51.0%, 0 null/empty)`
+
+### `sprint`
+
+- URL: `https://api.jolpi.ca/ergast/f1/2024/5/sprint.json`
+- Latency: 6814.2 ms (attempts: 1)
+- Envelope container: `MRData.RaceTable.Races`
+- Grain record path: `MRData.RaceTable.Races[].SprintResults`
+- Nested lists found: `MRData.RaceTable.Races` (1), `MRData.RaceTable.Races[].SprintResults` (20)
+- Pagination field types: `total` → string(numeric), `limit` → string(numeric), `offset` → string(numeric)
+
+**Needs casting at staging:**
+
+- `Driver.dateOfBirth (string(date))`
+- `Driver.permanentNumber (string(numeric))`
+- `FastestLap.lap (string(numeric))`
+- `FastestLap.rank (string(numeric))`
+- `Time.millis (string(numeric))`
+- `grid (string(numeric))`
+- `laps (string(numeric))`
+- `number (string(numeric))`
+- `points (string(numeric))`
+- `position (string(numeric))`
+- `positionText (string(numeric))`
+
+**Nullable in practice — not eligible for a key:**
+
+- `Time.time (present in 100.0%, 1 null/empty)`
+
+### `pitstops`
+
+- URL: `https://api.jolpi.ca/ergast/f1/2024/1/pitstops.json`
+- Latency: 2143.5 ms (attempts: 1)
+- Envelope container: `MRData.RaceTable.Races`
+- Grain record path: `MRData.RaceTable.Races[].PitStops`
+- Nested lists found: `MRData.RaceTable.Races` (1), `MRData.RaceTable.Races[].PitStops` (43)
+- Pagination field types: `total` → string(numeric), `limit` → string(numeric), `offset` → string(numeric)
+
+**Needs casting at staging:**
+
+- `duration (string, string(numeric))`
+- `lap (string(numeric))`
+- `stop (string(numeric))`
+- `time (string(time))`
+
+**No nullable fields observed in this sample.**
+
+### `laps`
+
+- URL: `https://api.jolpi.ca/ergast/f1/2024/1/laps.json`
+- Latency: 1076.6 ms (attempts: 1)
+- Envelope container: `MRData.RaceTable.Races`
+- Grain record path: `MRData.RaceTable.Races[].Laps[].Timings`
+- Nested lists found: `MRData.RaceTable.Races` (1), `MRData.RaceTable.Races[].Laps` (5), `MRData.RaceTable.Races[].Laps[].Timings` (100)
+- Pagination field types: `total` → string(numeric), `limit` → string(numeric), `offset` → string(numeric)
+
+**Needs casting at staging:**
+
+- `position (string(numeric))`
+
+**No nullable fields observed in this sample.**
+
+### `driverstandings`
+
+- URL: `https://api.jolpi.ca/ergast/f1/2024/1/driverstandings.json`
+- Latency: 1893.2 ms (attempts: 1)
+- Envelope container: `MRData.StandingsTable.StandingsLists`
+- Grain record path: `MRData.StandingsTable.StandingsLists[].DriverStandings`
+- Nested lists found: `MRData.StandingsTable.StandingsLists` (1), `MRData.StandingsTable.StandingsLists[].DriverStandings` (20), `MRData.StandingsTable.StandingsLists[].DriverStandings[].Constructors` (20)
+- Pagination field types: `total` → string(numeric), `limit` → string(numeric), `offset` → string(numeric)
+
+**Needs casting at staging:**
+
+- `Driver.dateOfBirth (string(date))`
+- `Driver.permanentNumber (string(numeric))`
+- `points (string(numeric))`
+- `position (string(numeric))`
+- `positionText (string(numeric))`
+- `wins (string(numeric))`
+
+**No nullable fields observed in this sample.**
+
+### `constructorstandings`
+
+- URL: `https://api.jolpi.ca/ergast/f1/2024/1/constructorstandings.json`
+- Latency: 709.5 ms (attempts: 1)
+- Envelope container: `MRData.StandingsTable.StandingsLists`
+- Grain record path: `MRData.StandingsTable.StandingsLists[].ConstructorStandings`
+- Nested lists found: `MRData.StandingsTable.StandingsLists` (1), `MRData.StandingsTable.StandingsLists[].ConstructorStandings` (10)
+- Pagination field types: `total` → string(numeric), `limit` → string(numeric), `offset` → string(numeric)
+
+**Needs casting at staging:**
+
+- `points (string(numeric))`
+- `position (string(numeric))`
+- `positionText (string(numeric))`
+- `wins (string(numeric))`
+
+**No nullable fields observed in this sample.**
+
+### `status`
+
+- URL: `https://api.jolpi.ca/ergast/f1/status.json`
+- Latency: 1727.2 ms (attempts: 1)
+- Envelope container: `MRData.StatusTable.Status`
+- Grain record path: `MRData.StatusTable.Status`
+- Nested lists found: `MRData.StatusTable.Status` (100)
+- Pagination field types: `total` → string(numeric), `limit` → string(numeric), `offset` → string(numeric)
+
+**Needs casting at staging:**
+
+- `count (string(numeric))`
+- `statusId (string(numeric))`
+
+**No nullable fields observed in this sample.**
 
 ## Still to do (not answered by this script)
 

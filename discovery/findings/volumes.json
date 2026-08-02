@@ -1,0 +1,78 @@
+[
+  {
+    "entity": "seasons",
+    "path": "seasons",
+    "total_rows": 77,
+    "calls_at_100": 1
+  },
+  {
+    "entity": "circuits",
+    "path": "circuits",
+    "total_rows": 78,
+    "calls_at_100": 1
+  },
+  {
+    "entity": "races",
+    "path": "races",
+    "total_rows": 1172,
+    "calls_at_100": 12
+  },
+  {
+    "entity": "drivers",
+    "path": "drivers",
+    "total_rows": 881,
+    "calls_at_100": 9
+  },
+  {
+    "entity": "constructors",
+    "path": "constructors",
+    "total_rows": 214,
+    "calls_at_100": 3
+  },
+  {
+    "entity": "results",
+    "path": "results",
+    "total_rows": 26115,
+    "calls_at_100": 262
+  },
+  {
+    "entity": "qualifying",
+    "path": "qualifying",
+    "total_rows": 11212,
+    "calls_at_100": 113
+  },
+  {
+    "entity": "sprint",
+    "path": "sprint",
+    "total_rows": 568,
+    "calls_at_100": 6
+  },
+  {
+    "entity": "pitstops",
+    "path": "pitstops",
+    "error": "HTTP 400: {\"detail\":\"Bad Request: Missing one of the required parameters ['season_year', 'race_round'].\"}"
+  },
+  {
+    "entity": "laps",
+    "path": "laps",
+    "error": "HTTP 400: {\"detail\":\"Bad Request: Missing one of the required parameters ['season_year', 'race_round'].\"}"
+  },
+  {
+    "entity": "status",
+    "path": "status",
+    "total_rows": 136,
+    "calls_at_100": 2
+  },
+  {
+    "entity": "driverstandings (one season)",
+    "path": "2024/driverstandings",
+    "total_rows": 24,
+    "calls_at_100": 1
+  },
+  {
+    "entity": "results (one season)",
+    "path": "2024/results",
+    "total_rows": 479,
+    "calls_at_100": 5
+  }
+]

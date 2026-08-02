@@ -19,30 +19,65 @@
 > and row caps are routinely different from what documentation implies.
 > **Validate first, then design.**
 
-For **every** endpoint, record the observed reality before creating tables. The
-rows below are *candidate* F1 entities — replace them with the real endpoints of
-the source chosen in Phase 0 (see [PRD §1](PRD.md#1-problem-statement)):
+**Source: Jolpica-F1** (`https://api.jolpi.ca/ergast/f1`), confirmed live
+2026-08-02 — all 13 endpoints returned HTTP 200. Evidence:
+[`discovery/findings/source_probe.md`](../discovery/findings/source_probe.md),
+reproducible with `python discovery/probe_source.py`.
 
-| Endpoint | Returns (list/dict) | Rows per call | Pagination | Key fields | Types that need casting |
+Every value below was **observed from a live response**, not read from
+documentation. All record paths are nested under an `MRData` envelope.
+
+| Endpoint | Records live at | Rows/call (cap 100) | All-time rows | Key fields | Needs casting |
 |---|---|---|---|---|---|
-| seasons | | | | | |
-| circuits | | | | | |
-| races / schedule | | | | | |
-| drivers | | | | | |
-| constructors | | | | | |
-| results | | | | | |
-| qualifying | | | | | |
-| pit stops / laps | | | | | |
-| standings (driver + constructor) | | | | | |
+| `seasons` | `SeasonTable.Seasons` | 77 | 77 | `season` | `season` → int |
+| `circuits` | `CircuitTable.Circuits` | 78 | 78 | `circuitId` | `lat`, `long` → numeric |
+| `races` | `RaceTable.Races` | 24/season | 1,172 | `season`, `round` | `date`, `time`, 18 session fields |
+| `drivers` | `DriverTable.Drivers` | 25/season | 881 | `driverId` | `dateOfBirth`, `permanentNumber` |
+| `constructors` | `ConstructorTable.Constructors` | 10/season | 214 | `constructorId` | none |
+| `results` | `RaceTable.Races[].Results` | 100 | 26,115 | `season`, `round`, `Driver.driverId` | 13 fields incl. `points`, `grid`, `position`, `laps`, `millis` |
+| `qualifying` | `RaceTable.Races[].QualifyingResults` | 100 | 11,212 | `season`, `round`, `Driver.driverId` | `position`, `number` |
+| `sprint` | `RaceTable.Races[].SprintResults` | 20/race | 568 | `season`, `round`, `Driver.driverId` | 11 fields |
+| `pitstops` | `RaceTable.Races[].PitStops` | 43/race | **requires season+round** | `season`, `round`, `driverId`, `stop` | `lap`, `stop`, `duration`, `time` |
+| `laps` | `RaceTable.Races[].Laps[].Timings` | 100 | **1,129 per race** | `season`, `round`, `lap`, `driverId` | `position` |
+| `driverstandings` | `StandingsTable.StandingsLists[].DriverStandings` | 20–24/round | **per-round only** | `season`, `round`, `Driver.driverId` | `points`, `position`, `wins` |
+| `constructorstandings` | `StandingsTable.StandingsLists[].ConstructorStandings` | 10/round | **per-round only** | `season`, `round`, `Constructor.constructorId` | `points`, `position`, `wins` |
+| `status` | `StatusTable.Status` | 100 | 136 | `statusId` | `count`, `statusId` |
+
+### Findings that change the design
+
+1. **Every scalar is a string.** `points: "26"`, `grid: "1"`, `millis: "5504742"`
+   — and so is the pagination metadata (`total: "479"`). Staging casts
+   everything; nothing may be trusted as-typed.
+2. **The per-call cap is 100 and the server clamps silently.** `limit=2000`
+   returns HTTP 200 with `"limit": "100"`. A backfill assuming a larger page
+   stops short and reports success.
+3. **Nullable in practice** (from a full-season sample, not one race):
+   `Time` 90% — absent for every DNF · `FastestLap` 97% · `Q2` 76% · `Q3` 51%
+   · on `races`, the `Sprint`/`SprintQualifying`/`SecondPractice` session
+   blocks are absent on non-sprint weekends. **None of these may appear in a
+   key, and none should carry a `not_null` test.**
+4. **`positionText` is the DNF marker,** carrying `R` alongside numeric
+   positions; `position` alone cannot distinguish a retirement.
+5. **`driverstandings.Constructors` is a list** — a driver who changes team
+   mid-season has several. Confirms `constructor_key` belongs on `fct_results`
+   at race grain, not on the standings fact.
+6. **`pitstops` and `laps` reject season-scoped calls** (HTTP 400: requires
+   `season_year` + `race_round`), so they cost at least one call per race.
+7. **Per-round standings require one call per race.** Season-scoped
+   `/{season}/driverstandings` returns only the *final* round; `limit`/`offset`
+   page the driver rows inside that single list, not across rounds.
 
 **Checklist:**
-- [ ] Chose and confirmed the live source API + its terms of use
-- [ ] Called every endpoint and inspected a real payload
-- [ ] Confirmed container type (a list is not a dict)
-- [ ] Confirmed date/time representation (epoch int vs ISO string) → drives column type
-- [ ] Confirmed per-call row caps and the pagination mechanism
-- [ ] Confirmed rate limits (per second / minute / day)
-- [ ] Confirmed which fields are **nullable in practice**, not just in docs
+- [x] Chose and confirmed the live source API — Jolpica-F1, 13/13 endpoints 200
+- [ ] Confirmed its **terms of use / licence** — still outstanding
+- [x] Called every endpoint and inspected a real payload
+- [x] Confirmed container type (records are nested lists under `MRData`)
+- [x] Confirmed date/time representation — ISO date strings + separate time strings, never epochs
+- [x] Confirmed per-call row caps (100, silently clamped) and pagination (`limit`/`offset`, verified working)
+- [~] Confirmed rate limits — **no rate-limit headers are returned on any
+      endpoint**; the published policy still needs confirming, and pacing must
+      be client-side
+- [x] Confirmed which fields are **nullable in practice**, not just in docs
 - [ ] Measured **join coverage** — what share of fact foreign keys actually exist
       in the dimension source (drives the Unknown-member design)
 - [ ] Classified each source: immutable event / mutable reference / **snapshot requiring history**

@@ -610,12 +610,55 @@ def write_markdown(results: list[dict], base_url: str, path: Path) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+# Entities whose all-time row count decides the backfill budget. Measured by
+# asking for one row and reading the reported total — one cheap call per
+# entity, rather than estimating and being wrong by an order of magnitude.
+VOLUME_PATHS: tuple[tuple[str, str], ...] = (
+    ("seasons", "seasons"),
+    ("circuits", "circuits"),
+    ("races", "races"),
+    ("drivers", "drivers"),
+    ("constructors", "constructors"),
+    ("results", "results"),
+    ("qualifying", "qualifying"),
+    ("sprint", "sprint"),
+    ("pitstops", "pitstops"),
+    ("laps", "laps"),
+    ("status", "status"),
+    ("driverstandings (one season)", f"{PROBE_SEASON}/driverstandings"),
+    ("results (one season)", f"{PROBE_SEASON}/results"),
+)
+
+
+def measure_volumes(session: requests.Session, base_url: str, delay: float, page_size: int = 100) -> list[dict]:
+    """Report all-time row counts and the calls a full backfill would cost."""
+    out = []
+    for label, path in VOLUME_PATHS:
+        resp = fetch(session, f"{base_url}/{path}.json", {"limit": 1, "offset": 0}, delay)
+        row: dict[str, Any] = {"entity": label, "path": path}
+        if resp.ok:
+            inner = resp.payload.get("MRData", resp.payload)
+            try:
+                total = int(inner.get("total", 0))
+            except (TypeError, ValueError):
+                total = 0
+            row["total_rows"] = total
+            row["calls_at_100"] = -(-total // page_size)  # ceiling division
+        else:
+            row["error"] = resp.error
+        out.append(row)
+        print(f"  {label:30s} {row.get('total_rows', row.get('error', ''))}")
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS)
     parser.add_argument("--only", nargs="*", help="probe only these endpoint names")
     parser.add_argument("--out", default="discovery/findings")
+    parser.add_argument("--volumes", action="store_true",
+                        help="measure all-time row counts and backfill call cost")
     args = parser.parse_args()
 
     selected = [e for e in ENDPOINTS if not args.only or e.name in args.only]
@@ -628,6 +671,14 @@ def main() -> int:
 
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
+
+    if args.volumes:
+        print(f"Measuring all-time volumes at {args.base_url}\n")
+        volumes = measure_volumes(session, args.base_url, args.delay)
+        volume_path = out_dir / "volumes.json"
+        volume_path.write_text(json.dumps(volumes, indent=2), encoding="utf-8")
+        print(f"\n  {volume_path}")
+        return 0
 
     print(f"Probing {args.base_url} — {len(selected)} endpoints\n")
     results = []
@@ -650,9 +701,25 @@ def main() -> int:
             print(f"FAIL {str(result.get('error', ''))[:70]}")
 
     json_path = out_dir / "source_probe.json"
-    json_path.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
+
+    # Merge into any existing report rather than replacing it. Re-probing one
+    # endpoint with --only must not silently discard the findings for the
+    # other twelve; partial evidence that looks complete is worse than none.
+    merged: dict[str, dict] = {}
+    if json_path.exists():
+        try:
+            for previous in json.loads(json_path.read_text(encoding="utf-8")):
+                merged[previous["name"]] = previous
+        except (ValueError, KeyError, TypeError):
+            print("  (existing report unreadable — writing a fresh one)")
+    merged.update({r["name"]: r for r in results})
+
+    order = {e.name: i for i, e in enumerate(ENDPOINTS)}
+    report = sorted(merged.values(), key=lambda r: order.get(r["name"], len(order)))
+
+    json_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
     md_path = out_dir / "source_probe.md"
-    write_markdown(results, args.base_url, md_path)
+    write_markdown(report, args.base_url, md_path)
 
     ok = sum(1 for r in results if r.get("status") == 200)
     print(f"\n{ok}/{len(results)} endpoints returned 200")

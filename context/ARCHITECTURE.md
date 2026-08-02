@@ -155,6 +155,12 @@ vanish silently.
 | 5 | dbt Core | Dataform, hand-written SQL | Industry standard for the target roles; tests, docs, and lineage built in |
 | 6 | Retry + dead-letter from the first implementation | Add resilience later | Transient upstream failures are routine; retrofitting loses records |
 | 7 | Airflow as orchestrator | Dagster, Prefect, cron/CI schedules | Heavier to run, but the most widely recognised orchestrator in the target job market |
+| 8 | **Jolpica-F1 as the single source** (`api.jolpi.ca/ergast/f1`) | OpenF1, FastF1, Ergast | All 13 endpoints needed for PRD §6 returned 200 in Phase 0. Ergast is shut down; OpenF1 covers only telemetry (already parked); FastF1 is a library, so ingestion would be a cached wrapper call rather than an HTTP client with retry and dead-letter — the engineering this project exists to demonstrate |
+| 9 | `discovery/` is separate from `ingestion/` | Put probes in `ingestion/`; delete after Phase 0 | Discovery code is evidence-gathering, not pipeline code, and must never be mistaken for it. Kept (not deleted) because the findings justify the schema; isolated one-way so neither side can import the other |
+| 10 | Client-side pacing, not header-driven throttling | Read rate-limit headers at runtime | The API returns **no** rate-limit headers on any endpoint, so remaining allowance cannot be read. Budget comes from the published policy, enforced by deliberate pacing plus `Retry-After` on 429 |
+| 11 | Page size fixed at the observed cap of 100 | Assume a larger page; read the cap from the response | `limit=2000` returns HTTP 200 with `"limit": "100"` — the server **silently clamps**. A backfill assuming a larger page would stop short and report success |
+| 12 | Backfill at **season** scope, not race scope | One call per race | Season-scoped `results` returns 479 rows in 5 calls; race-scoped needs one call per race for the same data. Roughly a 5× reduction against a source with no published burst allowance. Does not apply to `pitstops`, `laps` or per-round standings, which reject or ignore season-scoped calls |
+| 13 | **`laps` parked, not ingested** | Ingest capped (recent seasons only); ingest in full | Measured at ~14,000 backfill calls versus ~2,750 for everything else combined, and answers no question in PRD §6. A capped subset was rejected too: partial lap coverage invites analysis that silently excludes most of the sport's history |
 
 > Rows 1–7 are stack/pattern choices that carry over from the previous project
 > and are independent of the data source. **F1-specific decisions — source
@@ -241,6 +247,9 @@ committed config**. See [SECURITY_AND_GOVERNANCE.md](SECURITY_AND_GOVERNANCE.md)
 ├── CLAUDE.md                  # entry point: points at context/ before any work
 ├── README.md                  # the artifact reviewers actually read
 ├── context/                   # planning docs (this folder)
+├── discovery/                 # Phase 0 probes + findings; throwaway, never imported
+│   ├── probe_source.py
+│   └── findings/              # committed evidence behind the schema decisions
 ├── ingestion/                 # extraction + load to lake + load to warehouse
 │   ├── config.py             # single source of env-var config (§6)
 │   ├── extract.py
@@ -269,7 +278,11 @@ committed config**. See [SECURITY_AND_GOVERNANCE.md](SECURITY_AND_GOVERNANCE.md)
 **Rules**
 - One responsibility per module; `pipeline.py` orchestrates, it does not
   implement extraction or loading.
-- Nothing outside `ingestion/` talks to the source API.
+- Nothing outside `ingestion/` talks to the source API **in the pipeline**.
+  `discovery/` is the one exception: it exists to call the API before the
+  pipeline exists. It is one-way isolated — `discovery/` never imports from
+  `ingestion/`, and `ingestion/` never imports from `discovery/`. Findings
+  move between them as documented facts, not as shared code.
 - Nothing outside `dbt/` writes to the `staging` or `marts` schemas.
 
 ## 11. Development environment

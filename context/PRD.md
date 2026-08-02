@@ -4,14 +4,15 @@
 > doesn't serve a goal or success metric below, it goes to the
 > [Parking Lot](#parking-lot) — not into the build.
 >
-> **Status of this file:** framework carried over from a previous project; F1
-> specifics are drafts or `TODO (Phase 0)` placeholders. Nothing source-specific
-> here is validated yet — that is Phase 0's job.
+> **Status of this file:** the framework carries over from a previous project.
+> Source selection, functional requirements (§7) and volume targets (§8a) are
+> now validated against the live API; the dashboard spec (§8b) is still a
+> placeholder.
 
 | | |
 |---|---|
 | **Owner** | Lemuel Calinog |
-| **Status** | Draft / Planning — pre-Phase 0 |
+| **Status** | Phase 0 — discovery in progress (source validated) |
 | **Last updated** | 2026-08-02 |
 | **Target completion** | _(set a date)_ |
 
@@ -25,7 +26,11 @@ recent seasons) car telemetry. It is freely available but raw and unmodelled,
 so questions that span sessions, circuits, and seasons are not directly
 queryable for analysis.
 
-> **Candidate data sources — VALIDATE in Phase 0, do not assume any are live.**
+> **Source selected: Jolpica-F1** (`api.jolpi.ca/ergast/f1`), validated
+> 2026-08-02 — all 13 endpoints returned HTTP 200 and every payload was
+> inspected. See [SCHEMA § Phase 0](SCHEMA.md#phase-0-gate--complete-before-designing-any-table)
+> and [ARCHITECTURE § Decision log](ARCHITECTURE.md#7-decision-log-adr-lite) row 8.
+> The candidates assessed:
 > - **Jolpica-F1** (`api.jolpi.ca`) — community successor to the Ergast API;
 >   results, standings, schedules, laps, pit stops, 1950→present.
 > - **OpenF1** (`openf1.org`) — telemetry, car data, positions, intervals, team
@@ -169,12 +174,9 @@ test (optionally a small `dim_status` grouping mechanical / collision / finished
 
 ## 7. Functional requirements
 
-> `TODO (Phase 0):` restate FR1 against the actual endpoints once the source is
-> validated. The rest are source-independent.
-
 | ID | Requirement |
 |---|---|
-| FR1 | Extract the entities needed to answer §6 (e.g. seasons, races/circuits, drivers, constructors, results, qualifying, pit stops — confirm exact endpoints in Phase 0) |
+| FR1 | Extract from Jolpica-F1 (confirmed 2026-08-02): `seasons`, `circuits`, `races`, `drivers`, `constructors`, `results`, `qualifying`, `sprint`, `pitstops`, `driverstandings`, `constructorstandings`, `status`. `laps` is parked — see §12 |
 | FR2 | Land raw JSON in object storage partitioned by ingestion date |
 | FR3 | Load warehouse from the lake files (replayable) |
 | FR4 | Re-running any step must not duplicate data (idempotent) |
@@ -198,16 +200,35 @@ test (optionally a small `dim_status` grouping mechanical / collision / finished
 
 ## 8a. Volume targets
 
-> `TODO (Phase 0):` set concrete numbers once the API's row caps, pagination, and
-> rate limits are measured. Estimate total backfill API calls **before** running
-> it and confirm it fits the daily quota. Keep any high-cardinality dimension
-> (e.g. per-lap or telemetry data) deliberately bounded.
+Measured 2026-08-02 against Jolpica-F1 (`discovery/probe_source.py --volumes`).
+Page size is **100 rows, the observed hard cap**; call counts are ceiling
+division on the measured totals.
 
-| Dataset | Initial backfill | Per scheduled run |
-|---|---|---|
-| Reference data (seasons, circuits, drivers, constructors) | `TODO` | `TODO` |
-| Race-level results / qualifying / standings | `TODO` | `TODO` |
-| High-cardinality (laps / pit stops / telemetry) | `TODO` (cap this) | `TODO` |
+| Dataset | Rows (all-time) | Backfill calls | Per scheduled run |
+|---|---|---|---|
+| Reference (seasons, circuits, drivers, constructors, status) | 1,386 | **16** | 1–2 (changed rows only) |
+| `races` | 1,172 | **12** | 1 |
+| `results` | 26,115 | **262** | 1 per race |
+| `qualifying` | 11,212 | **113** | 1 per race |
+| `sprint` | 568 | **6** | 1 per sprint round |
+| Standings (driver + constructor) | per-round | **2,344** — 1 call per entity per race | 2 |
+| `pitstops` | ~43/race | **1,172** — season-scoped calls rejected | 1 per race |
+| `laps` | ~1,129/race | **~14,000** | — |
+
+**Totals:** ~2,753 calls without pit stops or laps · ~3,925 with pit stops ·
+~18,000 with laps.
+
+**Decisions this forces:**
+
+- **Laps are parked.** ~14,000 calls — more than three times the rest of the
+  project combined — to serve no question in §6. Moved to the Parking Lot.
+- **Standings dominate the remaining cost** at 2,344 calls, because per-round
+  standings cannot be fetched season-wide. They stay: `fct_driver_standings`
+  and `fct_constructor_standings` are MVP facts and Theme 1 depends on them.
+- **Backfill once, then incremental.** The full backfill is a one-off; a
+  scheduled run touches only the latest race.
+- **Rate limits are unpublished in-band** — no rate-limit headers are returned,
+  so the backfill must be paced client-side and be resumable.
 
 ## 8b. Dashboard specification
 
@@ -280,6 +301,7 @@ it and never open a source file. Treat it as a deliverable with a defined shape.
 |---|---|
 | Live-timing / telemetry streaming | Scope monster; batch satisfies all §6 questions |
 | Full telemetry backfill (OpenF1 car data) | Expensive relative to its analytical value at MVP |
+| **Lap timings (`laps`)** | Measured at ~14,000 backfill calls — 3× the whole rest of the project — and answers no §6 question. Parked 2026-08-02 |
 | ML race/lap prediction | Not a data-engineering signal |
 | Governed semantic layer / NL query interface | Built in the author's professional project over BigQuery instead |
 
