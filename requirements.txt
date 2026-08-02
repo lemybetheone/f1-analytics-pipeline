@@ -1,0 +1,16 @@
+# Pinned dependencies (NFR2: a fresh clone must reproduce this environment).
+#
+# Phase 0 needs only an HTTP client. Warehouse, lake, dbt and Airflow
+# dependencies are added by the phase that first needs them, so the
+# environment never carries libraries the committed code does not import.
+#
+# Python 3.13.2
+
+# --- direct ---
+requests==2.32.3
+
+# --- transitive (pinned for reproducibility) ---
+certifi==2026.7.22
+charset-normalizer==3.4.9
+idna==3.18
+urllib3==2.7.0
