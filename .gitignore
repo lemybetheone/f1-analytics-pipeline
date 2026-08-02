@@ -1,0 +1,38 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Private context — local only, never published
+*.private.md
+# Skill-level calibration for the AI assistant; not for public/recruiter view
+context/PROFILE.md
+# AI assistant entry point — kept local, not published to the portfolio repo
+/CLAUDE.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+dbt/.user.yml
+
+# Airflow
+airflow/logs/
+airflow/plugins/__pycache__/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

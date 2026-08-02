@@ -1,0 +1,174 @@
+# Security, Data Quality & Governance
+
+> Companion to [ARCHITECTURE.md](ARCHITECTURE.md). Covers secrets handling,
+> access control, data quality, observability, and lineage.
+
+---
+
+## 1. Secrets management
+
+### Rules
+
+1. **Real secrets live only in `.env`**, which is git-ignored.
+2. **`.env.example` contains placeholders only** — never a real value, not even
+   temporarily. It is a tracked file and anything typed into it is destined for
+   the remote repository.
+3. **Verify before the first commit**, don't assume:
+   ```bash
+   git check-ignore .env      # must print .env
+   git status                 # .env must NOT appear
+   ```
+4. **Never paste credentials into logs, terminals, chats, or screenshots.**
+5. **One config source** — both ingestion and transformation read the same
+   environment variables; config files reference env vars, never literals.
+
+### Day-zero setup order
+
+- [ ] `.gitignore` created **before** any credential exists on disk
+- [ ] `.env` created and confirmed ignored
+- [ ] `.env.example` committed with placeholders and a comment for each value
+      explaining where to obtain it
+- [ ] Connectivity smoke test passes using environment variables only
+
+### Rotation policy
+
+Rotate immediately if a credential is written to a tracked file, pasted into a
+log or chat, or if its exposure cannot be ruled out.
+
+**Rotation is not complete until the old credential is invalidated.** Order:
+
+1. Create the new credential
+2. Update `.env` and **verify the new credential works**
+3. **Then** deactivate and delete the old one
+
+> Operational note: managed databases may take several minutes to propagate a
+> password reset through their connection pooler. A brief authentication failure
+> immediately after a reset is expected behaviour, not a misconfiguration.
+
+## 2. Access control
+
+| Principle | Application |
+|---|---|
+| **Least privilege** | Storage credentials limited to the single bucket/prefix used |
+| **Separate credentials per system** | Object storage and warehouse use distinct credentials |
+| **No shared accounts** | Each identity is individually attributable |
+| **Short-lived where possible** | Prefer scoped keys; rotate on a schedule |
+
+Scope the storage policy to only the actions the pipeline performs — object
+put, get, and list on the project bucket — rather than broad or account-wide
+permissions.
+
+## 3. Data classification
+
+| Class | Applies to | Handling |
+|---|---|---|
+| **Public** | All F1 race / driver / constructor data | No restriction; safe to publish |
+| **Secret** | API and cloud credentials, database passwords | Env vars only; never committed; rotate on exposure |
+
+This project processes **no personal data of private individuals** — F1 drivers
+and team personnel are public figures in a public dataset. State this explicitly so
+reviewers know it was considered rather than overlooked.
+
+**Licensing (confirm in Phase 0 — this matters more for F1 than most sources):**
+F1 timing and results data carries real usage sensitivity, and the free
+community APIs each attach their own terms. Before ingesting, confirm the chosen
+source's licence and attribution requirements — e.g. the Ergast/Jolpica lineage
+is intended for **non-commercial** use, and OpenF1 has its own terms. This is a
+**non-commercial portfolio** project: attribute the source explicitly in the
+README, and do **not** redistribute bulk raw data. Treat "what am I allowed to
+do with this data" as a Phase 0 gate item, not an afterthought.
+
+## 4. Data quality framework
+
+Quality is enforced by tests that run on **every build**, not by manual checks.
+
+### Test tiers
+
+| Tier | What | When |
+|---|---|---|
+| **1 — Grain & keys** | Unique + not-null on the primary/composite key | **Always**, every model |
+| **2 — Integrity & domain** | `relationships` on FKs; `not_null` on join keys; `accepted_values` on categoricals | When downstream logic depends on it |
+| **3 — Business rules** | Ranges, reconciliation, row-count deltas | Where a violation would mislead analysis |
+| **Not tested** | Descriptive/free-text fields nothing joins or filters on | Deliberately omitted |
+
+> **Concrete Tier-3 example (this project):** reconcile a *derived* cumulative
+> points total against the *ingested official* standings. A divergence fails the
+> build and flags a scoring/modelling bug (missed sprint points, un-applied
+> penalty). See the standings decision in [PRD §6](PRD.md#modelling-notes-open-decisions).
+
+### Principles
+
+- **A test must protect a real assumption.** If its failure would not change
+  what you do, remove it.
+- **Do not test legitimately nullable columns for null.** Confirm nullability
+  from observed data and design tests around the truth, not the ideal.
+- **Over-testing is a failure mode**: it slows builds and causes alert fatigue,
+  which trains people to ignore genuine failures.
+- **Declare and enforce grain on every model** — the single highest-value test.
+
+### Source freshness
+
+Configure freshness thresholds on sources so stale upstream data fails loudly
+rather than silently producing outdated dashboards.
+
+## 5. Reliability & observability
+
+| Concern | Mechanism |
+|---|---|
+| Transient upstream errors | Retry with exponential backoff |
+| Record-level failures | Dead-letter table; monitored and retried |
+| Run failures | Orchestrator alerting (email/webhook) |
+| Silent data loss | Row-count checks; dead-letter must trend to zero |
+| Stale data | Source freshness tests |
+| Regressions | CI runs tests on every PR |
+
+**Monitor the dead-letter table.** A growing backlog means the pipeline is
+losing data even though runs report success.
+
+## 6. Lineage & documentation
+
+- **Generated, not hand-written** — `dbt docs generate` produces the lineage
+  graph and column-level documentation; publish it so reviewers can browse it.
+- **Descriptions are part of the contract** — every model states its grain and
+  purpose. If a description asserts a rule (for example, that a column is one of
+  a fixed set of values), enforce it with a test. *A description is a promise; a
+  test is enforcement.*
+- **Decision log** — non-obvious choices are recorded in
+  [ARCHITECTURE §7](ARCHITECTURE.md#7-decision-log-adr-lite).
+
+## 7. Change management
+
+- All changes via **pull request**; CI must be green to merge.
+- **Conventional commits** — the history should read as a narrative of the
+  project.
+- **Schema changes are versioned in code.** The DDL or migration is committed
+  and applied through a repeatable process, never applied ad hoc in a console
+  and left undocumented.
+
+> Note on idempotent DDL: `CREATE TABLE IF NOT EXISTS` silently skips tables
+> that already exist, so re-running a schema file does **not** apply changes to
+> an existing table. Either adopt a migration tool or make migrations explicit,
+> ordered, and committed.
+
+## 8. Retention & cost
+
+| Concern | Policy |
+|---|---|
+| Lake objects | Retain raw JSON (immutable, enables replay); revisit as free-tier limits approach |
+| Warehouse | Monitor against free-tier storage limits |
+| High-cardinality volume (laps / pit stops / telemetry) | Cap deliberately; set the bound in Phase 0 and document in the PRD |
+| Cost | $0 — free tiers only; verify no billable resources are provisioned |
+
+## 9. Pre-flight checklist
+
+Complete **before** writing pipeline code:
+
+- [ ] `.gitignore` in place; `.env` verified ignored
+- [ ] `.env.example` has placeholders only
+- [ ] Credentials scoped to least privilege
+- [ ] Connectivity smoke test passes for storage **and** warehouse
+- [ ] Rate limits and quotas documented
+- [ ] Data classification reviewed
+- [ ] Source licensing and attribution reviewed
+- [ ] Test tiers agreed
+- [ ] Alerting destination decided
