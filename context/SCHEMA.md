@@ -66,6 +66,24 @@ documentation. All record paths are nested under an `MRData` envelope.
 7. **Per-round standings require one call per race.** Season-scoped
    `/{season}/driverstandings` returns only the *final* round; `limit`/`offset`
    page the driver rows inside that single list, not across rounds.
+8. **Join coverage is 100%** across all 26,115 result rows, 1950→2024:
+   every `driverId`, `constructorId`, `status` and `(season, round)` resolves,
+   and all 1,172 races resolve to a circuit. Evidence:
+   [`discovery/findings/join_coverage.md`](../discovery/findings/join_coverage.md).
+9. **Field availability is era-dependent, and a modern sample lies about it.**
+   Measured across every decade:
+
+   | Field | 1950s–1990s | 2000s | 2010s+ |
+   |---|---|---|---|
+   | `FastestLap` | **absent entirely** | 58% | 96% |
+   | `Time` | 16–23% | 38% | 47–74% |
+   | `grid`, `laps`, `number`, `points`, `position`, `positionText` | 100% | 100% | 100% |
+
+   A 2024-only sample reported `FastestLap` at 97% and `Time` at 90%. Over
+   full history they are 0% and ~17% in the early decades. **Only the six
+   always-present fields may carry `not_null` tests**; a `not_null` on
+   `FastestLap` would pass on recent data and fail the moment the backfill
+   reaches 1999.
 
 **Checklist:**
 - [x] Chose and confirmed the live source API — Jolpica-F1, 13/13 endpoints 200
@@ -78,8 +96,8 @@ documentation. All record paths are nested under an `MRData` envelope.
       endpoint**; the published policy still needs confirming, and pacing must
       be client-side
 - [x] Confirmed which fields are **nullable in practice**, not just in docs
-- [ ] Measured **join coverage** — what share of fact foreign keys actually exist
-      in the dimension source (drives the Unknown-member design)
+- [x] Measured **join coverage** — 100% on all four `fct_results` edges across
+      26,115 rows and all 1,172 race→circuit edges
 - [ ] Classified each source: immutable event / mutable reference / **snapshot requiring history**
 - [ ] Verified connectivity to object storage and the warehouse
 
@@ -176,8 +194,11 @@ strings to UTC timestamps (keeping the raw value) · declare and test grain.
 key. Decouples the warehouse from source-system quirks.
 
 **Unknown member** — dimensions include a synthetic "Unknown" row, and facts map
-unmatched foreign keys to it. Measure the actual join coverage in Phase 0 and
-design for the gap rather than assuming full coverage.
+unmatched foreign keys to it. **Measured in Phase 0: coverage is 100%**, so the
+Unknown member is insurance against future source drift rather than a
+load-bearing part of the model today, and `relationships` tests can be strict on
+every fact-to-dimension edge. It is still built: a source that adds an unmatched
+key later should route the row to Unknown, not lose it to an inner join.
 
 **SCD Type 2** — built on append-only snapshots: compare consecutive
 `snapshot_date` rows and emit `valid_from` / `valid_to` / `is_current`. Use for
