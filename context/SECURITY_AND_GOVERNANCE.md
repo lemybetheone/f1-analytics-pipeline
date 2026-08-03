@@ -171,6 +171,11 @@ losing data even though runs report success.
 ## 7. Change management
 
 - All changes via **pull request**; CI must be green to merge.
+  > **Status (2026-08-03):** the pull-request half is in effect from Phase 1.
+  > The CI half is **not yet enforceable** — no workflow exists until Phase 4
+  > (PRD §9). Recorded rather than left implied, so the document does not assert
+  > a gate that isn't running. Phase 0's five commits predate this and went
+  > directly to `main`.
 - **Conventional commits** — the history should read as a narrative of the
   project.
 - **Schema changes are versioned in code.** The DDL or migration is committed
