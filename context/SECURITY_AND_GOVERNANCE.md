@@ -69,14 +69,44 @@ This project processes **no personal data of private individuals** — F1 driver
 and team personnel are public figures in a public dataset. State this explicitly so
 reviewers know it was considered rather than overlooked.
 
-**Licensing (confirm in Phase 0 — this matters more for F1 than most sources):**
-F1 timing and results data carries real usage sensitivity, and the free
-community APIs each attach their own terms. Before ingesting, confirm the chosen
-source's licence and attribution requirements — e.g. the Ergast/Jolpica lineage
-is intended for **non-commercial** use, and OpenF1 has its own terms. This is a
-**non-commercial portfolio** project: attribute the source explicitly in the
-README, and do **not** redistribute bulk raw data. Treat "what am I allowed to
-do with this data" as a Phase 0 gate item, not an afterthought.
+### Licensing — confirmed 2026-08-03
+
+**Source:** Jolpica-F1. **Data licence: CC BY-NC-SA 4.0**
+([terms](https://github.com/jolpica/jolpica-f1), reviewed against the version
+dated 2025-08-27). Three obligations follow, and ShareAlike is the one most
+projects miss:
+
+| Clause | Obligation here |
+|---|---|
+| **BY** (Attribution) | Credit Jolpica-F1 and name the CC BY-NC-SA 4.0 licence with a link, in the README and anywhere data is displayed |
+| **NC** (NonCommercial) | Satisfied — a personal portfolio is not "directed toward commercial advantage or monetary compensation". The project must never be monetised, ad-supported, or sold without contacting `admin@jolpi.ca` |
+| **SA** (ShareAlike) | **Derivatives of the data inherit the licence.** The star schema, marts and any published extract are adaptations, so they carry CC BY-NC-SA 4.0 — even though the *code* that produces them does not |
+
+**Repository licensing is therefore split**, and stating both is the honest
+position:
+
+- **Code** (`ingestion/`, `dbt/`, `discovery/`, `airflow/`) — the author's own
+  work, licensed independently. ShareAlike does not reach it: code is not an
+  adaptation of the data.
+- **Data and data derivatives** (anything in `discovery/findings/`, sample
+  payloads, dashboard screenshots, any committed extract) — CC BY-NC-SA 4.0,
+  attributed to Jolpica-F1.
+
+**Do not redistribute bulk raw data.** Landing raw JSON in a private object
+store is storage, not redistribution. Committing bulk extracts to a public
+repository would be redistribution and is out of bounds. Small excerpts kept as
+Phase 0 evidence are fine **with attribution** — which the findings files
+currently lack and must carry before the repository goes public.
+
+**Terms can change without notice** ("We reserve the right to change these
+terms"). The review date above is recorded deliberately; re-check before
+publishing.
+
+**No warranty.** The source is volunteer-run and donation-supported, and
+explicitly disclaims uptime, availability and correctness. This is why the lake
+is the replay source (ARCHITECTURE decision 1): the warehouse must be
+rebuildable without re-hitting the API, and a source-freshness failure is an
+expected event to handle, not an emergency to page on.
 
 ## 4. Data quality framework
 
