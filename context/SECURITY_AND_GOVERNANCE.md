@@ -24,11 +24,13 @@
 
 ### Day-zero setup order
 
-- [ ] `.gitignore` created **before** any credential exists on disk
-- [ ] `.env` created and confirmed ignored
-- [ ] `.env.example` committed with placeholders and a comment for each value
+- [x] `.gitignore` created **before** any credential exists on disk
+- [x] `.env` created and confirmed ignored (`git check-ignore .env` → `.env`;
+      absent from `git status`)
+- [x] `.env.example` committed with placeholders and a comment for each value
       explaining where to obtain it
-- [ ] Connectivity smoke test passes using environment variables only
+- [x] Connectivity smoke test passes using environment variables only —
+      `discovery/probe_connectivity.py`, both systems PASS 2026-08-03
 
 ### Rotation policy
 
@@ -191,14 +193,23 @@ losing data even though runs report success.
 
 ## 9. Pre-flight checklist
 
-Complete **before** writing pipeline code:
+Complete **before** writing pipeline code. Verified 2026-08-03 unless noted.
 
-- [ ] `.gitignore` in place; `.env` verified ignored
-- [ ] `.env.example` has placeholders only
-- [ ] Credentials scoped to least privilege
-- [ ] Connectivity smoke test passes for storage **and** warehouse
-- [ ] Rate limits and quotas documented
-- [ ] Data classification reviewed
-- [ ] Source licensing and attribution reviewed
-- [ ] Test tiers agreed
-- [ ] Alerting destination decided
+- [x] `.gitignore` in place; `.env` verified ignored
+- [x] `.env.example` has placeholders only
+- [~] Credentials scoped to least privilege — **lake yes, warehouse not yet.**
+      The S3 IAM user has `ListBucket`/`GetObject`/`PutObject` on one bucket and
+      no `DeleteObject`, so a leaked key cannot destroy the replay source. The
+      warehouse still connects as Supabase's `postgres` superuser; a dedicated
+      `f1_pipeline` role owning only the three schemas is outstanding
+- [x] Connectivity smoke test passes for storage **and** warehouse
+- [x] Rate limits and quotas documented — 4/s burst, 500/hr sustained
+- [x] Data classification reviewed — §3
+- [x] Source licensing and attribution reviewed — CC BY-NC-SA 4.0, §3
+- [x] Test tiers agreed — §4
+- [ ] Alerting destination decided — **outstanding**, due in Phase 3 with the
+      orchestrator
+
+**Environment as verified:** Supabase PostgreSQL 17.6 via the session pooler
+(`ap-southeast-1`), schemas `raw` / `staging` / `marts` created. Lake:
+`s3://f1-analytics-lake-lemy-4821` (`ap-southeast-1`), public access blocked.

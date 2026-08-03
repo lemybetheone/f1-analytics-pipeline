@@ -98,8 +98,10 @@ documentation. All record paths are nested under an `MRData` envelope.
 - [x] Confirmed which fields are **nullable in practice**, not just in docs
 - [x] Measured **join coverage** — 100% on all four `fct_results` edges across
       26,115 rows and all 1,172 race→circuit edges
-- [ ] Classified each source: immutable event / mutable reference / **snapshot requiring history**
-- [ ] Verified connectivity to object storage and the warehouse
+- [x] Classified each source: immutable event / mutable reference / snapshot —
+      see §2. No source requires an append-only `snapshot_date`
+- [x] Verified connectivity to object storage and the warehouse — both PASS
+      2026-08-03, schemas created
 
 ## Design order
 
@@ -124,18 +126,43 @@ documentation. All record paths are nested under an `MRData` envelope.
 
 ## 2. Raw layer
 
-> `TODO (Phase 0):` one row per source endpoint. For each, record **grain**,
-> **load pattern** (immutable event insert-do-nothing / mutable reference upsert /
-> append-only snapshot), and the reason. Classify from observed data, not docs.
+Classified 2026-08-03 from observed data. Evidence:
+[`discovery/findings/mutability.json`](../discovery/findings/mutability.json).
 
-| Table | Grain | Load pattern | Notes |
+| Table | Grain | Load pattern | Why |
 |---|---|---|---|
-| `raw.<entity>` | `TODO` | `TODO` | `TODO` |
+| `raw.seasons` | `season` | Upsert | Reference; two columns, correctable, no history value |
+| `raw.circuits` | `circuit_id` | Upsert | Reference; names and coordinates are correctable upstream |
+| `raw.races` | `(season, round)` | Upsert | **Mutable until run, immutable after.** Session dates shift during a live season, so insert-do-nothing would freeze a stale schedule |
+| `raw.drivers` | `driver_id` | Upsert | Reference; biographical fields, corrections possible, history not needed |
+| `raw.constructors` | `constructor_id` | Upsert | Reference. **No id was ever observed carrying two names** across 1996–2024 — rebrands are separate ids |
+| `raw.results` | `(season, round, driver_id)` | Upsert | **Not purely immutable.** The race is over, but penalties, appeals and disqualifications amend published results days later. Insert-do-nothing would silently keep the pre-penalty record |
+| `raw.qualifying` | `(season, round, driver_id)` | Upsert | Same correction window as results |
+| `raw.sprint` | `(season, round, driver_id)` | Upsert | Same correction window as results |
+| `raw.pitstops` | `(season, round, driver_id, stop)` | Insert `ON CONFLICT DO NOTHING` | Genuinely immutable: timing measurements, not adjudicated outcomes |
+| `raw.driver_standings` | `(season, round, driver_id)` | Upsert | Periodic snapshot whose snapshot key is `round`. Corrections propagate when a result is amended |
+| `raw.constructor_standings` | `(season, round, constructor_id)` | Upsert | As above |
+| `raw.status` | `status_id` | Upsert | Small reference code list |
 | `raw.failed_ingestions` | append log | Insert | Dead-letter for retry |
+
+**The classification finding that matters:** no source here requires an
+append-only `snapshot_date`. History that matters is already carried in a
+natural key — standings by `round`, a driver's constructor by `(season, round)`
+on the results fact. The source is a historical record that expresses change by
+issuing new rows and new ids, not by mutating old ones.
+
+**The one correction-window subtlety:** `results`, `qualifying`, `sprint` and
+both standings tables look like immutable events but are not. F1 results are
+adjudicated, and a stewards' decision can change a finishing position or a
+points total after publication. Upsert keeps the warehouse aligned with the
+record books; the raw JSON in the lake preserves what was originally returned,
+so the amendment is still traceable.
 
 **Rules**
 - Every table carries `ingested_at`.
 - Snapshot tables carry `snapshot_date`; the key is `(natural_key, snapshot_date)`.
+  _No table in §2 meets this: standings snapshot on `round`, which is already
+  part of the natural key._
 - No nullable column may appear in a primary key.
 - Raw stores what the source returned — casting and renaming happen in staging.
 
@@ -177,15 +204,16 @@ strings to UTC timestamps (keeping the raw value) · declare and test grain.
 | Model | Grain | SCD | Notes |
 |---|---|---|---|
 | `dim_driver` | one row per driver | Type 1 _(confirm)_ | Name, nationality, DOB. Season team lives on the fact, not here |
-| `dim_constructor` | one row per constructor **per validity span** | **Type 2 (decided)** | SCD2 on rebrands (Toro Rosso→AlphaTauri→RB); `valid_from`/`valid_to`/`is_current`. Facts join the row current as of the race date |
+| `dim_constructor` | one row per constructor | **Type 1** _(was Type 2; reversed 2026-08-03)_ | No `constructorId` was ever observed carrying two names across 1996–2024 — rebrands are separate ids upstream, so there is no attribute for SCD2 to track |
 | `dim_race` | one row per **(season, round)** | Type 1 | circuit, season, round, date; the event/date dimension |
 | `dim_circuit` | one row per circuit | Type 1 | For circuit-level rollups (Theme 5) |
 | `dim_status` _(optional)_ | one row per status value | Type 1 | Groups retirement reasons (mechanical / collision / finished) for Theme 6 |
 
-> **Decisions locked (2026-08-01), see [PRD §6](PRD.md#modelling-notes-open-decisions):**
-> standings split into two entity facts; **ingest official standings + reconcile**
-> a derived cumulative total as a DQ test; **SCD2 on `dim_constructor`** for
-> rebrands (Type 2), `dim_driver` stays Type 1.
+> **Decisions, see [PRD §6](PRD.md#modelling-notes-open-decisions):** standings
+> split into two entity facts; **ingest official standings + reconcile** a
+> derived cumulative total as a DQ test (both locked 2026-08-01). **SCD2 on
+> `dim_constructor` was reversed 2026-08-03** on Phase 0 evidence — every
+> dimension here is Type 1.
 
 ## 5. Key patterns to implement
 
@@ -200,15 +228,16 @@ load-bearing part of the model today, and `relationships` tests can be strict on
 every fact-to-dimension edge. It is still built: a source that adds an unmatched
 key later should route the row to Unknown, not lose it to an inner join.
 
-**SCD Type 2** — built on append-only snapshots: compare consecutive
-`snapshot_date` rows and emit `valid_from` / `valid_to` / `is_current`. Use for
-attributes that change over time and whose history matters (e.g. a driver's
-constructor across a career — confirm during Phase 0 which attributes need this).
+**SCD Type 2** — **not used in this project.** Phase 0 classification (§2) found
+no source that changes an attribute in place: history is carried in natural keys
+(standings by `round`, a driver's constructor by `(season, round)` on the
+results fact), and constructor rebrands are separate ids upstream rather than a
+mutated name. Building `valid_from`/`valid_to`/`is_current` with no varying data
+behind it would be structure for its own sake. Revisit only if a source is added
+that genuinely mutates.
 
-**Range / temporal joins** — where an event carries no direct key to a
-time-bounded reference, attach it by joining on a time range (event timestamp
-between the reference's valid-from and the next one's). Identify any such case in
-Phase 0.
+**Range / temporal joins** — **not needed**, for the same reason: with no
+time-bounded dimension rows, every fact-to-dimension edge is a direct key join.
 
 **Incremental facts** — large fact tables process only new rows per run.
 

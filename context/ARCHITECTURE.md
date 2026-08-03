@@ -72,7 +72,7 @@ flowchart LR
 | Pattern | Where | Why |
 |---|---|---|
 | **Idempotent upsert** | All raw loads | Re-running a step never duplicates rows |
-| **Append-only snapshots** | Slowly-changing sources | Preserves history needed for SCD2 & trends |
+| ~~**Append-only snapshots**~~ | _not used_ | Phase 0 found no source that mutates an attribute in place; history is carried in natural keys instead. See SCHEMA §2 |
 | **Immutable event append** | Match facts | Matches never change once played |
 | **Retry with exponential backoff** | All API calls | Upstream 5xx/timeouts are routine, not exceptional |
 | **Dead-letter log** | Record-level failures | Failures are recoverable, not silently lost |
@@ -150,7 +150,7 @@ vanish silently.
 |---|---|---|---|
 | 1 | ELT with a lake landing zone | Direct API → warehouse | Raw is replayable; transformations can be rebuilt without re-hitting the API |
 | 2 | Warehouse loads **from the lake** | Parallel write to lake and warehouse | Single source of truth; the load step is independently replayable |
-| 3 | Append-only snapshots for changing attributes | Overwrite upsert | Overwrite destroys the history SCD2 and trend models require |
+| 3 | Append-only snapshots for changing attributes | Overwrite upsert | Overwrite destroys the history SCD2 and trend models require. **Not triggered by any F1 source** (see 18, 19) — the rule stands, but no source meets it |
 | 4 | Postgres (Supabase) as warehouse | BigQuery, Snowflake, Databricks, MotherDuck/DuckDB | Free and always-on; pipeline patterns are warehouse-agnostic. See §7.1 |
 | 5 | dbt Core | Dataform, hand-written SQL | Industry standard for the target roles; tests, docs, and lineage built in |
 | 6 | Retry + dead-letter from the first implementation | Add resilience later | Transient upstream failures are routine; retrofitting loses records |
@@ -165,6 +165,9 @@ vanish silently.
 | 15 | `not_null` tests only on the six fields present in every era | Derive nullability from a recent-season sample | `FastestLap` is absent before 2000 and `Time` is present in 16–23% of rows pre-2000, but a 2024 sample reports them at 97% and 90%. Tests written off the modern sample would pass in development and fail once the backfill reached the 1990s |
 | 16 | Backfill paced to the **hourly** budget (500/hr) and checkpointed as resumable | Pace to the 4/s burst limit; run the backfill in one pass | Documented limits are 4 req/s burst **and 500 req/hr sustained**. The hourly budget binds first: 4/s would exhaust it in ~2 minutes. At ~3,925 calls the backfill spans ~8 hours, so it must survive interruption and resume without re-fetching — which is idempotency (decision 6) being load-bearing rather than decorative |
 | 17 | Repository licensing split: code separate from data | Single repository licence | Source data is CC BY-NC-SA 4.0, whose ShareAlike clause reaches adaptations of the *data* — the marts and any published extract — but not the code that produces them. One blanket licence would either over-claim the data or wrongly bind the code. See SECURITY §3 |
+| 18 | **`dim_constructor` is Type 1 — reverses the earlier Type 2 decision** | Keep Type 2; Type 1 plus a hand-curated lineage seed | Walking every constructor list 1996–2024, no `constructorId` was ever observed carrying two names: rebrands are separate ids upstream. With no attribute changing in place, Type 2 would produce `valid_from`/`valid_to`/`is_current` columns over single-version rows. The lineage seed was rejected as scope; the cost is that cross-rebrand team continuity is not answerable, which is accepted |
+| 19 | No SCD Type 2 anywhere in the project | Manufacture a Type 2 use case to demonstrate the technique | Decision 18 removed the only candidate. Every remaining source carries history in a natural key. Building the pattern where the data does not call for it is structure for its own sake, and is visible as such to anyone who queries the table |
+| 20 | Warehouse reached via Supabase's **session pooler**, not the direct host | Direct connection; transaction pooler (port 6543) | The direct endpoint is IPv6-only on new projects and unreachable from most IPv4 networks — the risk §9 anticipated. The transaction pooler holds no session state, which breaks dbt. Session pooler verified working first attempt |
 
 > Rows 1–7 are stack/pattern choices that carry over from the previous project
 > and are independent of the data source. **F1-specific decisions — source
@@ -189,7 +192,7 @@ analytical scan performance.
 |---|---|
 | **Scale** | At this project's data volume (tens of thousands of rows), columnar storage and MPP provide no measurable benefit. The engine is not the bottleneck. |
 | **Cost & availability** | Must be free *and* always-on. Most managed analytical warehouses offer only time-limited trials, which expire and leave the project broken. |
-| **Portability of the patterns** | The techniques demonstrated — idempotent loads, layered modelling, dimensional design, SCD Type 2, incremental processing, testing — are warehouse-agnostic. They transfer to any engine. |
+| **Portability of the patterns** | The techniques demonstrated — idempotent loads, layered modelling, dimensional design, incremental processing, testing — are warehouse-agnostic. They transfer to any engine. |
 | **Focus** | Re-platforming costs days of migration and retesting for no functional gain. That effort is better spent on the dimensional model, tests, and documentation, which are what actually differentiate the work. |
 
 **What is given up:**
