@@ -1,0 +1,186 @@
+{
+  "probed_at": "2026-08-03T04:52:26+00:00",
+  "base_url": "https://api.jolpi.ca/ergast/f1",
+  "seasons": [
+    1996,
+    2024
+  ],
+  "distinct_constructor_ids": 44,
+  "ids_with_more_than_one_name": {},
+  "rebrand_chains_as_separate_ids": [
+    {
+      "chain": [
+        "toro_rosso",
+        "alphatauri",
+        "rb"
+      ],
+      "spans": {
+        "toro_rosso": {
+          "name": "Toro Rosso",
+          "first_season": 2006,
+          "last_season": 2019
+        },
+        "alphatauri": {
+          "name": "AlphaTauri",
+          "first_season": 2020,
+          "last_season": 2023
+        },
+        "rb": {
+          "name": "RB F1 Team",
+          "first_season": 2024,
+          "last_season": 2024
+        }
+      }
+    },
+    {
+      "chain": [
+        "renault",
+        "alpine"
+      ],
+      "spans": {
+        "renault": {
+          "name": "Renault",
+          "first_season": 2002,
+          "last_season": 2020
+        },
+        "alpine": {
+          "name": "Alpine F1 Team",
+          "first_season": 2021,
+          "last_season": 2024
+        }
+      }
+    },
+    {
+      "chain": [
+        "force_india",
+        "racing_point",
+        "aston_martin"
+      ],
+      "spans": {
+        "force_india": {
+          "name": "Force India",
+          "first_season": 2008,
+          "last_season": 2018
+        },
+        "racing_point": {
+          "name": "Racing Point",
+          "first_season": 2019,
+          "last_season": 2020
+        },
+        "aston_martin": {
+          "name": "Aston Martin",
+          "first_season": 2021,
+          "last_season": 2024
+        }
+      }
+    },
+    {
+      "chain": [
+        "sauber",
+        "bmw_sauber",
+        "alfa"
+      ],
+      "spans": {
+        "sauber": {
+          "name": "Sauber",
+          "first_season": 1996,
+          "last_season": 2024
+        },
+        "bmw_sauber": {
+          "name": "BMW Sauber",
+          "first_season": 2006,
+          "last_season": 2009
+        },
+        "alfa": {
+          "name": "Alfa Romeo",
+          "first_season": 2019,
+          "last_season": 2023
+        }
+      }
+    },
+    {
+      "chain": [
+        "jordan",
+        "spyker",
+        "spyker_mf1"
+      ],
+      "spans": {
+        "jordan": {
+          "name": "Jordan",
+          "first_season": 1996,
+          "last_season": 2005
+        },
+        "spyker": {
+          "name": "Spyker",
+          "first_season": 2007,
+          "last_season": 2007
+        },
+        "spyker_mf1": {
+          "name": "Spyker MF1",
+          "first_season": 2006,
+          "last_season": 2006
+        }
+      }
+    },
+    {
+      "chain": [
+        "stewart",
+        "jaguar",
+        "red_bull"
+      ],
+      "spans": {
+        "stewart": {
+          "name": "Stewart",
+          "first_season": 1997,
+          "last_season": 1999
+        },
+        "jaguar": {
+          "name": "Jaguar",
+          "first_season": 2000,
+          "last_season": 2004
+        },
+        "red_bull": {
+          "name": "Red Bull",
+          "first_season": 2005,
+          "last_season": 2024
+        }
+      }
+    },
+    {
+      "chain": [
+        "tyrrell",
+        "bar",
+        "honda",
+        "brawn",
+        "mercedes"
+      ],
+      "spans": {
+        "tyrrell": {
+          "name": "Tyrrell",
+          "first_season": 1996,
+          "last_season": 1998
+        },
+        "bar": {
+          "name": "BAR",
+          "first_season": 1999,
+          "last_season": 2005
+        },
+        "honda": {
+          "name": "Honda",
+          "first_season": 2006,
+          "last_season": 2008
+        },
+        "brawn": {
+          "name": "Brawn",
+          "first_season": 2009,
+          "last_season": 2009
+        },
+        "mercedes": {
+          "name": "Mercedes",
+          "first_season": 2010,
+          "last_season": 2024
+        }
+      }
+    }
+  ]
+}

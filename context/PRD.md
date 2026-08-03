@@ -166,11 +166,24 @@ test (optionally a small `dim_status` grouping mechanical / collision / finished
   points, historical scoring), **and** reconcile a *derived* cumulative-points
   total against them as a data-quality test. Derive-only was rejected: it silently
   drifts from the record books.
-- **SCD2 on `dim_constructor` rebrands ✓ (decided).** Driver→constructor per
-  season is already captured on `fct_results` at race grain, so SCD2 has no home
-  there. It *does* earn its place on **constructor rebrands** (Toro Rosso →
-  AlphaTauri → RB; Renault → Alpine) — model `dim_constructor` as **Type 2** so a
-  constructor's name/identity history is queryable. `dim_driver` stays Type 1.
+- **~~SCD2 on `dim_constructor` rebrands~~ — REVERSED 2026-08-03 on Phase 0
+  evidence.** The original reasoning was that rebrands (Toro Rosso → AlphaTauri
+  → RB) are a constructor's identity history, and so earn Type 2. **The source
+  does not model them that way.** Walking every constructor list from 1996 to
+  2024, *no `constructorId` was ever observed carrying more than one name* —
+  each rebrand is a distinct id with a contiguous, non-overlapping span. There
+  is no changing attribute for SCD2 to track, so `valid_from`/`valid_to`/
+  `is_current` would be structure with no varying data behind it.
+  **`dim_constructor` is Type 1**, as is `dim_driver`. Evidence:
+  [`discovery/findings/mutability.json`](../discovery/findings/mutability.json).
+- **Consequence, accepted:** rebrands are separate constructors, exactly as the
+  source models them. "How has this team performed across its rebrands" is
+  **not** answerable without a hand-curated lineage mapping, which was
+  considered and rejected as scope. Theme 5's per-constructor trend question is
+  unaffected.
+- **The project therefore demonstrates no SCD Type 2.** This is deliberate:
+  none of these sources changes attributes in place, and building the pattern
+  where the data does not call for it would be structure for its own sake.
 
 ## 7. Functional requirements
 
