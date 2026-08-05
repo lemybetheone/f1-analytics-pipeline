@@ -217,4 +217,11 @@ Complete **before** writing pipeline code. Verified 2026-08-03 unless noted.
 
 **Environment as verified:** Supabase PostgreSQL 17.6 via the session pooler
 (`ap-southeast-1`), schemas `raw` / `staging` / `marts` created. Lake:
-`s3://f1-analytics-lake-lemy-4821` (`ap-southeast-1`), public access blocked.
+S3 bucket in `ap-southeast-1`, public access blocked, reached by a scoped IAM
+user with no `DeleteObject`.
+
+> Concrete resource identifiers — bucket name, project ref, account id — live in
+> `.env` and are deliberately **not** recorded here. They are not credentials,
+> but publishing them in a public repository invites probing and lets a deleted
+> bucket name be claimed by someone else. The connectivity probe reads them from
+> the environment and prints them locally, which is where they belong.
