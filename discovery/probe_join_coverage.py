@@ -30,9 +30,10 @@ import argparse
 import json
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import requests
 
@@ -205,7 +206,7 @@ def main() -> int:
     )
 
     report: dict[str, Any] = {
-        "probed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "probed_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "base_url": args.base_url,
         "scope": scan_path,
         "dimension_sizes": {

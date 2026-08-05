@@ -1,0 +1,48 @@
+# CI — the gate that makes a pull request mean something.
+#
+# On a solo project a PR review catches nothing: the author and the reviewer are
+# the same person. What a PR *can* do is refuse to merge when an automated check
+# fails, which is a gate no amount of care replaces at 1am. That is why this
+# workflow was pulled forward from Phase 4 (see PRD § Change control).
+#
+# Deliberately excluded for now: dbt build (no models exist yet) and sqlfluff
+# (no SQL yet). Both arrive with Phase 2 — ARCHITECTURE §13 describes the full
+# pipeline. A check that lints nothing is worse than no check: it goes green
+# regardless and trains you to trust it.
+#
+# No network access, no credentials. These tests must never reach the source
+# API or a real database — network-dependent CI is flaky CI, and flaky CI is
+# ignored CI.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Pinned to match the local development environment. Reproducibility
+          # is a stated requirement (PRD NFR2), and "works on my machine" is
+          # exactly what a pinned CI runtime prevents.
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install pinned dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Unit tests
+        run: pytest -q

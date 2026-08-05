@@ -32,7 +32,7 @@ import argparse
 import json
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import requests
@@ -123,7 +123,7 @@ def main() -> int:
         })
 
     report = {
-        "probed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "probed_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "base_url": args.base_url,
         "seasons": [args.from_season, args.to_season],
         "distinct_constructor_ids": len(names_by_id),
