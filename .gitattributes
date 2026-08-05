@@ -1,0 +1,29 @@
+# Line endings are a property of the repository, not of whoever cloned it.
+#
+# Without this, Git for Windows normalises via the machine-level core.autocrlf
+# setting, so the same file can arrive differently on different machines. That
+# is merely noisy for Markdown and actively breaking for shell scripts: a shell
+# script with CRLF fails with "bad interpreter" or "command not found", which
+# reads like a missing dependency rather than a line-ending problem.
+
+# Normalise every text file to LF in the repository and in the working tree.
+* text=auto eol=lf
+
+# Explicit for the files where CRLF breaks execution outright.
+*.sh   text eol=lf
+*.py   text eol=lf
+*.sql  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# Windows batch files are the one case that genuinely needs CRLF.
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Never touch binaries.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.pdf  binary
+*.ico  binary
