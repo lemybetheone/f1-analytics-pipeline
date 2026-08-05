@@ -256,7 +256,7 @@ division on the measured totals.
 | Phase | Focus | Exit criteria |
 |---|---|---|
 | **0 — Discovery** | Validate every endpoint's real payload; prove storage + warehouse connectivity; confirm rate limits & pagination | Documented source inventory; smoke test connects to both systems |
-| **1 — Ingestion** | API → lake → warehouse raw layer | Raw tables populated; idempotent re-run proven |
+| **1 — Ingestion** | API → lake → warehouse raw layer; **CI gate live** (moved from Phase 4, see Change control) | Raw tables populated; idempotent re-run proven; CI green on every PR |
 | **2 — Modelling** | Staging + star schema + tests | All models built, all tests green |
 | **3 — Orchestration** | Scheduler/DAG, alerting, incremental | One successful scheduled end-to-end run |
 | **4 — Serving & polish** | Dashboard, CI, docs, README | MVP checklist complete |
@@ -329,3 +329,30 @@ Any new idea must pass this test before it is built:
 3. Is the **MVP (§5)** already complete?
 
 If the answer to any of these is unsatisfying → **Parking Lot**.
+
+### Approved changes
+
+**2026-08-04 — CI moved from Phase 4 to Phase 1.** Lint and unit tests run on
+every pull request from Phase 1 rather than at the end.
+
+1. **Goal:** G6 (documented, reviewable) and the MVP's "tests pass on every
+   model" — a gate that only appears at the end has not gated anything.
+2. **Metric:** *Test pass rate — 100% green on every build.* Unenforceable
+   without CI; the metric existed with no mechanism behind it.
+3. **MVP complete?** No — but this is not new scope. CI was **already in scope**
+   for Phase 4 (§9, ARCHITECTURE §13). Only its *timing* changed, so nothing is
+   added to the build.
+
+**Why it moved:** SECURITY §7 requires pull requests, and the project is solo.
+Self-review catches nothing — the author and reviewer are the same person — so
+without CI the pull-request requirement is ceremony with a real time cost. CI is
+what converts it into a gate that can actually refuse a merge. Either CI moves
+forward or the PR requirement should be dropped; keeping both while one is
+inert is the worst of the three.
+
+**Scope kept deliberately small:** `ruff` and `pytest` only. `dbt build` and
+`sqlfluff` stay in Phase 4 because no models or SQL exist yet, and a check that
+validates nothing passes regardless and teaches you to trust it.
+
+**Convention adopted alongside it:** pull requests are opened **per unit of
+work** (a phase slice), not per commit.
