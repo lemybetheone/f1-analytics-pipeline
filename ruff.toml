@@ -1,0 +1,26 @@
+# Lint configuration. Kept deliberately small: rules that catch real defects,
+# not rules that generate churn for style opinions.
+
+target-version = "py313"
+line-length = 100
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes — undefined names, unused imports, the real bug-catchers
+    "I",    # import sorting
+    "B",    # bugbear — mutable default args, and similar traps
+    "UP",   # pyupgrade — keep syntax current with the pinned Python
+    "SIM",  # simplify
+]
+ignore = [
+    "E501",   # line length is handled by the formatter, not enforced as an error
+    "UP038",  # isinstance(x, (A, B)) is measurably faster than isinstance(x, A | B)
+              # and this runs per field on every record profiled. Readability is
+              # a wash; the tuple form stays.
+]
+
+[lint.per-file-ignores]
+# Phase 0 probes deliberately catch broad exceptions: a discovery run must
+# survive anything the source does and report it, rather than aborting.
+"discovery/*.py" = ["BLE001"]

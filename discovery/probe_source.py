@@ -40,7 +40,7 @@ import sys
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -542,7 +542,7 @@ def write_markdown(results: list[dict], base_url: str, path: Path) -> None:
         "> [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/).",
         "",
         f"- **Source:** `{base_url}`",
-        f"- **Probed at:** {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
+        f"- **Probed at:** {datetime.now(UTC).isoformat(timespec='seconds')}",
         f"- **Probe season / round:** {PROBE_SEASON} / {PROBE_ROUND}",
         "",
         "## Endpoint inventory",
@@ -608,10 +608,10 @@ def write_markdown(results: list[dict], base_url: str, path: Path) -> None:
             f"- Envelope container: `{r.get('envelope_record_path', '—')}`",
             f"- Grain record path: `{r.get('grain_record_path', '—')}`"
             + ("" if r.get("grain_path_matched_total") else " _(inferred — did not match reported total)_"),
-            f"- Nested lists found: " + ", ".join(
+            "- Nested lists found: " + ", ".join(
                 f"`{p}` ({n})" for p, n in r.get("record_lists", {}).items()
             ),
-            f"- Pagination field types: " + ", ".join(
+            "- Pagination field types: " + ", ".join(
                 f"`{k}` → {v}" for k, v in r.get("pagination_types", {}).items()
             ),
             "",

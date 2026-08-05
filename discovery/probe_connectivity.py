@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -102,15 +101,14 @@ def check_warehouse(env: dict[str, str]) -> bool:
             user=user,
             password=settings["WAREHOUSE_PASSWORD"],
             connect_timeout=15,
-        ) as conn:
-            with conn.cursor() as cur:
-                cur.execute("select version(), current_database(), current_user, "
-                            "current_setting('server_version_num')")
-                version, database, whoami, version_num = cur.fetchone()
+        ) as conn, conn.cursor() as cur:
+            cur.execute("select version(), current_database(), current_user, "
+                        "current_setting('server_version_num')")
+            version, database, whoami, version_num = cur.fetchone()
 
-                cur.execute("select schema_name from information_schema.schemata "
-                            "order by schema_name")
-                schemas = [row[0] for row in cur.fetchall()]
+            cur.execute("select schema_name from information_schema.schemata "
+                        "order by schema_name")
+            schemas = [row[0] for row in cur.fetchall()]
 
         print(f"  OK      connected as {whoami} to {database}")
         print(f"  server  {version.split(' on ')[0]}  (version_num {version_num})")
