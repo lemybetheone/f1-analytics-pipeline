@@ -18,11 +18,27 @@ process, never applied ad hoc in a console and left undocumented."*
 
 ## Applying
 
-Until a migration runner is introduced, apply in numeric order via the Supabase
-SQL editor, pasting the committed file **verbatim**. The requirement is that
-what ran is what is committed — not that a particular tool ran it.
+```bash
+python migrations/apply.py --status     # what is applied, what is pending
+python migrations/apply.py              # apply everything pending
+```
+
+The runner connects with the **pipeline credentials**, which matters: the
+Supabase SQL editor connects as `postgres`, so anything created there would be
+owned by `postgres` rather than `f1_pipeline` — the ownership split migration
+002 exists to prevent. Each migration commits in one transaction with its
+ledger row, so a failure can never leave a record claiming success.
+
+Applied versions are tracked in `raw.schema_migrations`. That lives in `raw`
+rather than a dedicated `meta` schema because the pipeline role owns only
+`raw`/`staging`/`marts` and cannot create new schemas — least privilege working
+as designed.
+
+`--mark-applied NNN` records a version **without running it**, for adopting a
+database whose early migrations were applied by hand.
 
 | # | File | Applied | Notes |
 |---|---|---|---|
-| 001 | `001_create_schemas.sql` | 2026-08-03 | Applied by `discovery/probe_connectivity.py --create-schemas` before this directory existed. Recorded here so a fresh environment can be rebuilt from the repository alone |
-| 002 | `002_create_pipeline_role.sql` | 2026-08-04 | Password set out of band. Verified: connects as `f1_pipeline`, owns all three schemas, holds no `SUPERUSER` / `CREATEDB` / `CREATEROLE` / `BYPASSRLS` |
+| 001 | `001_create_schemas.sql` | 2026-08-03 | Applied by `discovery/probe_connectivity.py --create-schemas` before this directory existed; adopted into the ledger with `--mark-applied` |
+| 002 | `002_create_pipeline_role.sql` | 2026-08-04 | Password set out of band. Verified: connects as `f1_pipeline`, owns all three schemas, holds no `SUPERUSER` / `CREATEDB` / `CREATEROLE` / `BYPASSRLS`. Adopted with `--mark-applied` — re-running it would fail on an existing role |
+| 003 | `003_raw_ingestion_tables.sql` | 2026-08-06 | First migration applied by the runner. `raw.results`, `raw.failed_ingestions`, `raw.ingestion_checkpoints`, all owned by `f1_pipeline` |
