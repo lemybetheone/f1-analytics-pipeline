@@ -27,9 +27,16 @@ SECRET_KEYS = (
 )
 
 # Shapes that should never appear in a tracked file.
+#
+# Matched on the *shape of a real credential*, not on the variable name. An
+# earlier version flagged any `AWS_SECRET_ACCESS_KEY=<anything>`, which fired on
+# a test fixture using a one-character dummy. A guard that cries wolf gets
+# disabled — the same alert-fatigue argument SECURITY §4 makes about
+# over-testing. So: AWS secrets are exactly 40 base64-ish characters, and access
+# key ids are AKIA plus 16 uppercase alphanumerics.
 CREDENTIAL_PATTERNS = (
     ("AWS access key id", re.compile(r"AKIA[0-9A-Z]{16}")),
-    ("AWS secret access key assignment", re.compile(r"AWS_SECRET_ACCESS_KEY\s*=\s*\S+")),
+    ("AWS secret access key", re.compile(r"AWS_SECRET_ACCESS_KEY\s*=\s*['\"]?[A-Za-z0-9/+=]{30,}")),
     ("Postgres URI with inline password", re.compile(r"postgres(?:ql)?://[^:\s]+:[^@\s]+@")),
 )
 
