@@ -110,8 +110,29 @@ def check_warehouse(env: dict[str, str]) -> bool:
                         "order by schema_name")
             schemas = [row[0] for row in cur.fetchall()]
 
+            # Which powers does the connected role actually hold? SECURITY §2
+            # requires least privilege, and "we ran the migration" is not the
+            # same as "the role came out least-privileged". Assert it.
+            cur.execute(
+                "select rolsuper, rolcreatedb, rolcreaterole, rolbypassrls "
+                "from pg_roles where rolname = current_user"
+            )
+            privileges = cur.fetchone()
+
         print(f"  OK      connected as {whoami} to {database}")
         print(f"  server  {version.split(' on ')[0]}  (version_num {version_num})")
+
+        held = [name for name, granted in zip(
+            ("SUPERUSER", "CREATEDB", "CREATEROLE", "BYPASSRLS"), privileges, strict=True
+        ) if granted]
+        if held:
+            print(f"  WARN    role holds {', '.join(held)} — SECURITY §2 wants the "
+                  f"pipeline scoped to its own schemas")
+            print("          A leaked credential reaches the whole database, not "
+                  "three rebuildable schemas.")
+        else:
+            print("  privs   least privilege confirmed (no SUPERUSER, CREATEDB, "
+                  "CREATEROLE or BYPASSRLS)")
 
         wanted = [env.get(k) for k in
                   ("WAREHOUSE_SCHEMA_RAW", "WAREHOUSE_SCHEMA_STAGING", "WAREHOUSE_SCHEMA_MARTS")]

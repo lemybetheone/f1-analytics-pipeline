@@ -202,11 +202,14 @@ Complete **before** writing pipeline code. Verified 2026-08-03 unless noted.
 
 - [x] `.gitignore` in place; `.env` verified ignored
 - [x] `.env.example` has placeholders only
-- [~] Credentials scoped to least privilege — **lake yes, warehouse not yet.**
-      The S3 IAM user has `ListBucket`/`GetObject`/`PutObject` on one bucket and
-      no `DeleteObject`, so a leaked key cannot destroy the replay source. The
-      warehouse still connects as Supabase's `postgres` superuser; a dedicated
-      `f1_pipeline` role owning only the three schemas is outstanding
+- [x] Credentials scoped to least privilege — **both sides, verified
+      mechanically by `discovery/probe_connectivity.py`.** The S3 IAM user has
+      `ListBucket`/`GetObject`/`PutObject` on one bucket and no `DeleteObject`,
+      so a leaked key cannot destroy the replay source; the probe also asserts
+      it is not the account root. The warehouse connects as `f1_pipeline`
+      (migration 002), which owns `raw`/`staging`/`marts` and holds no
+      `SUPERUSER`, `CREATEDB`, `CREATEROLE` or `BYPASSRLS`. Blast radius of a
+      leaked warehouse credential is three schemas rebuildable from the lake
 - [x] Connectivity smoke test passes for storage **and** warehouse
 - [x] Rate limits and quotas documented — 4/s burst, 500/hr sustained
 - [x] Data classification reviewed — §3
