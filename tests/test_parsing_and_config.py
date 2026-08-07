@@ -10,9 +10,11 @@ from __future__ import annotations
 import pytest
 
 from ingestion.config import ConfigError, load, read_env_file
+from ingestion.entities import ENTITIES, parse_records
 from ingestion.load_lake import Lake
-from ingestion.load_warehouse import parse_results
 from tests.test_extract import make_settings
+
+RESULTS = ENTITIES["results"]
 
 
 def race(season="2024", rnd="1", results=None):
@@ -27,6 +29,11 @@ def payload(races):
     return {"MRData": {"RaceTable": {"Races": races}}}
 
 
+def parse_results(doc):
+    """Adapter kept so these tests read the same as the behaviour they assert."""
+    return parse_records(RESULTS, doc)
+
+
 # --- parsing ---------------------------------------------------------------
 
 def test_parses_grain_keys_from_two_levels():
@@ -37,7 +44,7 @@ def test_parses_grain_keys_from_two_levels():
     ]))
 
     assert not failures
-    assert [(r.season, r.round, r.driver_id) for r in records] == [
+    assert [(r.keys["season"], r.keys["round"], r.keys["driver_id"]) for r in records] == [
         ("2024", "1", "verstappen"),
         ("2024", "1", "norris"),
         ("2024", "2", "verstappen"),
@@ -80,6 +87,84 @@ def test_empty_and_malformed_payloads_do_not_raise():
     for candidate in ({}, {"MRData": {}}, {"MRData": {"RaceTable": {}}}, payload([])):
         records, failures = parse_results(candidate)
         assert records == [] and failures == []
+
+
+# --- the entity registry ---------------------------------------------------
+
+def test_flat_entity_reads_records_directly():
+    """Reference endpoints have no parent level; the record is the record."""
+    drivers = ENTITIES["drivers"]
+    doc = {"MRData": {"DriverTable": {"Drivers": [
+        {"driverId": "hamilton", "givenName": "Lewis"},
+        {"driverId": "alonso", "givenName": "Fernando"},
+    ]}}}
+
+    records, failures = parse_records(drivers, doc)
+
+    assert not failures
+    assert [r.keys["driver_id"] for r in records] == ["hamilton", "alonso"]
+    assert records[0].payload["givenName"] == "Lewis"
+
+
+def test_composite_grain_without_nesting():
+    """races is (season, round) — two keys, both on the record itself."""
+    doc = {"MRData": {"RaceTable": {"Races": [
+        {"season": "2024", "round": "1", "raceName": "Bahrain"},
+    ]}}}
+
+    records, _ = parse_records(ENTITIES["races"], doc)
+
+    assert records[0].keys == {"season": "2024", "round": "1"}
+
+
+def test_qualifying_uses_its_own_child_key():
+    """Same shape as results but a different nested array — spec-driven, not copied."""
+    doc = {"MRData": {"RaceTable": {"Races": [{
+        "season": "2024", "round": "3",
+        "QualifyingResults": [{"Driver": {"driverId": "norris"}, "Q1": "1:29.1"}],
+    }]}}}
+
+    records, failures = parse_records(ENTITIES["qualifying"], doc)
+
+    assert not failures
+    assert records[0].keys == {"season": "2024", "round": "3", "driver_id": "norris"}
+
+
+def test_results_spec_ignores_a_qualifying_payload():
+    """A spec must not scavenge records from the wrong array."""
+    doc = {"MRData": {"RaceTable": {"Races": [{
+        "season": "2024", "round": "3",
+        "QualifyingResults": [{"Driver": {"driverId": "norris"}}],
+    }]}}}
+
+    records, failures = parse_records(ENTITIES["results"], doc)
+
+    assert records == [] and failures == []
+
+
+def test_every_spec_declares_a_grain():
+    """A table without a declared grain cannot be upserted or tested."""
+    for name, spec in ENTITIES.items():
+        assert spec.keys, f"{name} declares no grain"
+        assert spec.table, f"{name} declares no table"
+        if spec.child_key:
+            assert spec.parent_fields, (
+                f"{name} nests records but lifts no parent fields — "
+                "season/round would be lost"
+            )
+
+
+def test_season_scoped_entity_requires_a_season():
+    with pytest.raises(ValueError, match="requires a season"):
+        ENTITIES["results"].path_for(None)
+
+    assert ENTITIES["results"].path_for("2024") == "2024/results"
+    assert ENTITIES["drivers"].path_for() == "drivers"
+
+
+def test_scope_label_separates_global_from_season():
+    assert ENTITIES["drivers"].scope_label() == "all"
+    assert ENTITIES["results"].scope_label("2024") == "season=2024"
 
 
 # --- lake keys -------------------------------------------------------------

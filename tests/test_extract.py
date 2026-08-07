@@ -19,6 +19,20 @@ from ingestion.config import Settings
 from ingestion.extract import ExtractError, Extractor, RateLimiter
 
 
+@pytest.fixture(autouse=True)
+def fast_sleep(monkeypatch):
+    """Never actually sleep in a unit test.
+
+    The retry path backs off exponentially — 2s, 4s, 8s — so exercising it for
+    real cost 14 seconds in a single test and dominated the whole suite. What
+    is under test is *whether* it waits and *how long it decides to*, not the
+    passage of time. Yields the recorded durations so tests can assert on them.
+    """
+    slept: list[float] = []
+    monkeypatch.setattr("ingestion.extract.time.sleep", lambda s: slept.append(s))
+    return slept
+
+
 def make_settings(**overrides) -> Settings:
     base = dict(
         source_base_url="https://example.test/f1",
@@ -160,17 +174,28 @@ def test_retries_connection_errors():
     assert page.total == 1
 
 
-def test_honours_retry_after_header(monkeypatch):
-    slept: list[float] = []
-    monkeypatch.setattr("ingestion.extract.time.sleep", lambda s: slept.append(s))
-
+def test_honours_retry_after_header(fast_sleep):
     session = FakeSession([
         FakeResponse(status_code=429, headers={"Retry-After": "7"}),
         FakeResponse(body=mrdata(total=1, limit=100, offset=0)),
     ])
     Extractor(make_settings(), session=session).fetch_page("2024/results")
 
-    assert 7 in slept, "must wait the interval the server asked for, not a guess"
+    assert 7 in fast_sleep, "must wait the interval the server asked for, not a guess"
+
+
+def test_backoff_is_exponential_between_attempts(fast_sleep):
+    """Retrying at a fixed interval hammers a struggling upstream."""
+    session = FakeSession([FakeResponse(status_code=503) for _ in range(4)])
+
+    with pytest.raises(ExtractError):
+        Extractor(make_settings(), session=session).fetch_page("2024/results")
+
+    # The rate limiter shares time.sleep and contributes sub-millisecond
+    # pacing waits, so filter to the backoff waits rather than asserting on
+    # the whole list.
+    backoff_waits = [s for s in fast_sleep if s >= 1]
+    assert backoff_waits == [2.0, 4.0, 8.0], "each wait should double"
 
 
 # --- string-typed metadata -------------------------------------------------

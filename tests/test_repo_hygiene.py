@@ -9,6 +9,7 @@ a rule that is only written down is a rule that eventually gets missed at 1am.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -90,26 +91,32 @@ def test_no_credential_shaped_strings_in_tracked_files() -> None:
     introduced three commits ago is still a secret, and a test that only looks
     at the latest change would have stopped catching it.
     """
-    skip_dirs = {".git", ".venv", "__pycache__", ".ruff_cache", ".pytest_cache"}
+    skip_dirs = {".git", ".venv", "venv", "__pycache__", ".ruff_cache",
+                 ".pytest_cache", "node_modules", ".mypy_cache"}
+    scan_suffixes = {".md", ".py", ".sql", ".yml", ".yaml", ".toml", ".txt",
+                     ".example", ".json"}
     findings: list[str] = []
 
-    for path in REPO_ROOT.rglob("*"):
-        if not path.is_file() or any(part in skip_dirs for part in path.parts):
-            continue
-        if path.name == ".env" or path.suffix not in {".md", ".py", ".sql", ".yml",
-                                                      ".yaml", ".toml", ".txt",
-                                                      ".example", ".json"}:
-            continue
-        if path.name == ".env.example":
-            continue  # covered precisely by the tests above
+    # os.walk with in-place pruning, not rglob: rglob descends into .venv and
+    # filters afterwards, walking tens of thousands of files only to discard
+    # them. Pruning keeps this test at ~0.01s as the repo grows.
+    for dirpath, dirnames, filenames in os.walk(REPO_ROOT):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
 
-        try:
-            content = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
+        for filename in filenames:
+            path = Path(dirpath) / filename
+            if filename in {".env", ".env.example"}:
+                continue  # .env is untracked; .env.example is covered precisely above
+            if path.suffix not in scan_suffixes:
+                continue
 
-        for label, pattern in CREDENTIAL_PATTERNS:
-            if pattern.search(content):
-                findings.append(f"{path.relative_to(REPO_ROOT)}: {label}")
+            try:
+                content = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+
+            for label, pattern in CREDENTIAL_PATTERNS:
+                if pattern.search(content):
+                    findings.append(f"{path.relative_to(REPO_ROOT)}: {label}")
 
     assert not findings, "credential-shaped strings found in tracked files:\n" + "\n".join(findings)
