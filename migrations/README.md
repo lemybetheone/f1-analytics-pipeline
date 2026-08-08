@@ -42,3 +42,5 @@ database whose early migrations were applied by hand.
 | 001 | `001_create_schemas.sql` | 2026-08-03 | Applied by `discovery/probe_connectivity.py --create-schemas` before this directory existed; adopted into the ledger with `--mark-applied` |
 | 002 | `002_create_pipeline_role.sql` | 2026-08-04 | Password set out of band. Verified: connects as `f1_pipeline`, owns all three schemas, holds no `SUPERUSER` / `CREATEDB` / `CREATEROLE` / `BYPASSRLS`. Adopted with `--mark-applied` — re-running it would fail on an existing role |
 | 003 | `003_raw_ingestion_tables.sql` | 2026-08-06 | First migration applied by the runner. `raw.results`, `raw.failed_ingestions`, `raw.ingestion_checkpoints`, all owned by `f1_pipeline` |
+| 004 | `004_raw_reference_and_session_tables.sql` | 2026-08-07 | `raw.seasons`, `circuits`, `drivers`, `constructors`, `status`, `races`, `qualifying`, `sprint` |
+| 005 | `005_raw_race_scoped_tables.sql` | 2026-08-08 | `raw.pitstops`, `raw.driver_standings`, `raw.constructor_standings`. Pit stops key on `(season, round, driver, stop)` — without `stop`, 368 of 825 rows would collide |
