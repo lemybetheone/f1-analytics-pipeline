@@ -4,21 +4,22 @@ Two phases, deliberately separate:
 
 1. **Extract and land.** Page through the API, write each page to the lake,
    checkpoint after every page. This is the expensive, rate-limited half — the
-   one that must survive interruption, because a full backfill is ~3,925 calls
-   against a 500/hour budget and therefore about eight hours.
+   one that must survive interruption, because a full backfill is thousands of
+   calls against a 500/hour budget.
 
 2. **Load.** List the landed objects, read them *back from the lake*, and
    upsert. Nothing here touches the API, so it can be re-run freely — that is
    the point of landing raw first.
 
-Running phase 2 alone re-loads the warehouse from existing lake objects at zero
-API cost, which is what "replayable" means in practice.
+`--load-only` re-loads the warehouse from existing lake objects at zero API
+cost, which is what "replayable" means in practice.
 
 Usage
 -----
     python -m ingestion.pipeline --entity results --season 2024
+    python -m ingestion.pipeline --entity drivers
+    python -m ingestion.pipeline --all-reference
     python -m ingestion.pipeline --entity results --season 2024 --load-only
-    python -m ingestion.pipeline --entity results --season 2024 --resume
 """
 
 from __future__ import annotations
@@ -28,79 +29,65 @@ import sys
 from datetime import UTC, datetime
 
 from ingestion.config import ConfigError, Settings, load
+from ingestion.entities import ENTITIES, SCOPE_GLOBAL, SCOPE_SEASON, EntitySpec, parse_records
 from ingestion.extract import ExtractError, Extractor
 from ingestion.load_lake import Lake
-from ingestion.load_warehouse import (
-    LoadOutcome,
-    Warehouse,
-    parse_lake_object,
-    parse_results,
-)
-
-# Only `results` for now. Decision 22: prove one endpoint through the whole
-# path before generalising, because the risk is the vertical path rather than
-# the twelfth extractor.
-ENTITY_PATHS = {
-    "results": "{season}/results",
-}
+from ingestion.load_warehouse import LoadOutcome, Warehouse, parse_lake_object
 
 
-def extract_and_land(settings: Settings, warehouse: Warehouse, entity: str,
-                     season: str, resume: bool, ingestion_date: str) -> list[str]:
+def extract_and_land(settings: Settings, warehouse: Warehouse, spec: EntitySpec,
+                     season: str | None, resume: bool, ingestion_date: str,
+                     extractor: Extractor, lake: Lake) -> list[str]:
     """Page through the API and land each page. Returns the keys written."""
-    scope = f"season={season}"
-    path = ENTITY_PATHS[entity].format(season=season)
+    scope = spec.scope_label(season)
+    path = spec.path_for(season)
 
-    start_offset = 0
+    offset = 0
     if resume:
-        checkpoint = warehouse.get_checkpoint(entity, scope)
+        checkpoint = warehouse.get_checkpoint(spec.name, scope)
         if checkpoint and checkpoint[1] == "complete":
-            print(f"  {scope} already complete — nothing to extract")
+            print(f"    {scope} already complete — skipping extract")
             return []
         if checkpoint:
-            start_offset = checkpoint[0]
-            print(f"  resuming {scope} from offset {start_offset}")
+            offset = checkpoint[0]
+            print(f"    resuming from offset {offset}")
 
-    extractor = Extractor(settings)
-    lake = Lake(settings)
     written: list[str] = []
-    offset = start_offset
 
     while True:
         try:
             page = extractor.fetch_page(path, offset=offset)
         except ExtractError as exc:
-            # The request is dead after retries. Record it and stop this scope
-            # rather than pressing on: a gap in the middle of a paginated
-            # backfill is worse than a short one you can resume.
+            # Dead after retries. Record it and stop this scope rather than
+            # pressing on: a gap in the middle of a paginated backfill is worse
+            # than a short one you can resume.
             warehouse.record_failure(
-                entity=entity,
+                entity=spec.name,
                 request_url=f"{settings.source_base_url}/{path}.json",
                 request_params={"limit": 100, "offset": offset},
-                attempt_count=4,
-                error_class=type(exc).__name__,
-                error_detail=str(exc),
+                attempt_count=4, error_class=type(exc).__name__, error_detail=str(exc),
             )
-            warehouse.save_checkpoint(entity, scope, offset, None, "failed")
+            warehouse.save_checkpoint(spec.name, scope, offset, None, "failed")
             warehouse.commit()
             raise
 
-        key = lake.key_for(entity, scope, page.offset, ingestion_date)
+        key = lake.key_for(spec.name, scope, page.offset, ingestion_date)
         lake.put(key, page.content)
         written.append(key)
 
         next_offset = page.offset + page.limit
-        done = page.is_last
+        done = page.is_last or page.total == 0
 
-        # Checkpoint after the object is durably in the lake, never before. If
-        # the process dies between the two, the worst case is re-fetching one
-        # page — the opposite order would skip it entirely.
+        # Checkpoint only after the object is durably in the lake. If the
+        # process dies between the two, the worst case is re-fetching one page;
+        # the opposite order would skip it entirely.
         warehouse.save_checkpoint(
-            entity, scope, next_offset, page.total, "complete" if done else "in_progress")
+            spec.name, scope, next_offset, page.total,
+            "complete" if done else "in_progress")
         warehouse.commit()
 
-        print(f"  landed {key}  ({page.offset + page.limit if not done else page.total}"
-              f"/{page.total} rows)")
+        print(f"    landed {key.rsplit('/', 1)[-1]}  "
+              f"({min(next_offset, page.total)}/{page.total} rows)")
 
         if done:
             break
@@ -109,54 +96,80 @@ def extract_and_land(settings: Settings, warehouse: Warehouse, entity: str,
     return written
 
 
-def load_from_lake(settings: Settings, warehouse: Warehouse, entity: str,
-                   season: str, ingestion_date: str) -> LoadOutcome:
+def load_from_lake(settings: Settings, warehouse: Warehouse, spec: EntitySpec,
+                   season: str | None, ingestion_date: str, lake: Lake) -> LoadOutcome:
     """Read landed objects back out of the lake and upsert them."""
-    lake = Lake(settings)
-    scope = f"season={season}"
-    prefix = f"{settings.lake_prefix}/{entity}/{ingestion_date}/{entity}_{scope}_"
+    scope = spec.scope_label(season)
+    prefix = f"{settings.lake_prefix}/{spec.name}/{ingestion_date}/{spec.name}_{scope}_"
 
     keys = lake.list_keys(prefix)
     if not keys:
-        print(f"  no lake objects under {prefix}")
+        print(f"    no lake objects under {prefix}")
         return LoadOutcome()
 
     outcome = LoadOutcome()
     for key in keys:
-        content = lake.get(key)
         try:
-            payload = parse_lake_object(content)
+            payload = parse_lake_object(lake.get(key))
         except ValueError as exc:
             warehouse.record_failure(
-                entity=entity, request_url=key, request_params={"key": key},
+                entity=spec.name, request_url=key, request_params={"key": key},
                 attempt_count=1, error_class=type(exc).__name__, error_detail=str(exc))
             outcome.failed += 1
             continue
 
-        records, failures = parse_results(payload)
+        records, failures = parse_records(spec, payload)
 
         # Record-level failures are dead-lettered and the run continues.
         for fragment, reason in failures:
             warehouse.record_failure(
-                entity=entity, request_url=key, request_params={"key": key},
+                entity=spec.name, request_url=key, request_params={"key": key},
                 attempt_count=1, error_class="RecordError", error_detail=reason,
                 record_payload=fragment)
             outcome.failed += 1
 
-        inserted, updated = warehouse.upsert_results(records, source_key=key)
+        inserted, updated = warehouse.upsert(spec, records, source_key=key)
         outcome.parsed += len(records)
         outcome.inserted += inserted
         outcome.updated += updated
-        print(f"  {key}: {len(records)} parsed, {inserted} inserted, {updated} updated")
 
     warehouse.commit()
     return outcome
 
 
+def run_entity(settings: Settings, warehouse: Warehouse, spec: EntitySpec,
+               season: str | None, args, ingestion_date: str,
+               extractor: Extractor, lake: Lake) -> LoadOutcome | None:
+    label = f"{spec.name}" + (f" season={season}" if season else "")
+    print(f"\n{label}")
+
+    if not args.load_only:
+        try:
+            extract_and_land(settings, warehouse, spec, season, args.resume,
+                             ingestion_date, extractor, lake)
+        except ExtractError as exc:
+            print(f"    FAILED: {exc}", file=sys.stderr)
+            print("    Recorded in raw.failed_ingestions; re-run with --resume.",
+                  file=sys.stderr)
+            return None
+
+    outcome = load_from_lake(settings, warehouse, spec, season, ingestion_date, lake)
+    print(f"    parsed {outcome.parsed}, inserted {outcome.inserted}, "
+          f"updated {outcome.updated}, failed {outcome.failed} "
+          f"→ raw.{spec.table} holds {warehouse.count(spec)}")
+    return outcome
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--entity", default="results", choices=sorted(ENTITY_PATHS))
-    parser.add_argument("--season", required=True)
+    parser.add_argument("--entity", choices=sorted(ENTITIES),
+                        help="a single entity to ingest")
+    parser.add_argument("--all-reference", action="store_true",
+                        help="every global-scope entity (seasons, circuits, drivers, "
+                             "constructors, status, races)")
+    parser.add_argument("--all-season", action="store_true",
+                        help="every season-scoped entity; requires --season")
+    parser.add_argument("--season", help="season for season-scoped entities")
     parser.add_argument("--load-only", action="store_true",
                         help="skip the API entirely; reload from existing lake objects")
     parser.add_argument("--resume", action="store_true",
@@ -164,6 +177,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ingestion-date", default=None,
                         help="lake partition to write or read (default: today, UTC)")
     args = parser.parse_args(argv)
+
+    if not (args.entity or args.all_reference or args.all_season):
+        parser.error("choose --entity, --all-reference or --all-season")
+
+    selected: list[EntitySpec] = []
+    if args.entity:
+        selected.append(ENTITIES[args.entity])
+    if args.all_reference:
+        selected += [s for s in ENTITIES.values() if s.scope == SCOPE_GLOBAL]
+    if args.all_season:
+        selected += [s for s in ENTITIES.values() if s.scope == SCOPE_SEASON]
+
+    needs_season = [s.name for s in selected if s.scope == SCOPE_SEASON]
+    if needs_season and not args.season:
+        parser.error(f"--season is required for: {', '.join(needs_season)}")
 
     try:
         settings = load()
@@ -173,36 +201,33 @@ def main(argv: list[str] | None = None) -> int:
 
     ingestion_date = args.ingestion_date or datetime.now(UTC).strftime("%Y-%m-%d")
 
-    print(f"entity={args.entity} season={args.season} env={settings.target_env}")
+    print(f"entities:  {', '.join(s.name for s in selected)}")
     print(f"warehouse: {settings.dsn_description}")
     print(f"lake:      s3://{settings.lake_bucket}/{settings.lake_prefix}")
-    print(f"partition: {ingestion_date}\n")
+    print(f"partition: {ingestion_date}")
+
+    # One extractor across all entities so the rate budget is shared. A limiter
+    # per entity would let six entities each spend the full hourly allowance.
+    extractor = Extractor(settings)
+    lake = Lake(settings)
+    failed: list[str] = []
 
     with Warehouse(settings) as warehouse:
-        if not args.load_only:
-            print("Extract and land")
-            try:
-                extract_and_land(settings, warehouse, args.entity, args.season,
-                                 args.resume, ingestion_date)
-            except ExtractError as exc:
-                print(f"\nExtraction failed: {exc}", file=sys.stderr)
-                print("Recorded in raw.failed_ingestions; re-run with --resume.",
-                      file=sys.stderr)
-                return 1
-            print()
+        for spec in selected:
+            season = args.season if spec.scope == SCOPE_SEASON else None
+            if run_entity(settings, warehouse, spec, season, args,
+                          ingestion_date, extractor, lake) is None:
+                failed.append(spec.name)
 
-        print("Load from lake")
-        outcome = load_from_lake(settings, warehouse, args.entity, args.season,
-                                 ingestion_date)
+        unresolved = warehouse.unresolved_failures()
 
-        total = warehouse.count_results()
-        unresolved = warehouse.unresolved_failures(args.entity)
-
-    print(f"\n  parsed {outcome.parsed}, inserted {outcome.inserted}, "
-          f"updated {outcome.updated}, failed {outcome.failed}")
-    print(f"  raw.results now holds {total} rows")
+    print(f"\napi calls used: {extractor.limiter.used_in_window}"
+          f"/{settings.requests_per_hour} in the last hour")
     if unresolved:
-        print(f"  ! {unresolved} unresolved dead-letter rows — investigate")
+        print(f"! {unresolved} unresolved dead-letter rows — investigate")
+    if failed:
+        print(f"! failed entities: {', '.join(failed)}", file=sys.stderr)
+        return 1
     return 0
 
 

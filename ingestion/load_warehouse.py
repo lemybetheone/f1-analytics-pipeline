@@ -17,16 +17,7 @@ from psycopg import sql
 from psycopg.types.json import Jsonb
 
 from ingestion.config import Settings
-
-
-@dataclass(frozen=True)
-class ResultRecord:
-    """One row of `raw.results`, at grain (season, round, driver)."""
-
-    season: str
-    round: str
-    driver_id: str
-    payload: dict
+from ingestion.entities import EntitySpec, Record
 
 
 @dataclass
@@ -35,49 +26,6 @@ class LoadOutcome:
     inserted: int = 0
     updated: int = 0
     failed: int = 0
-
-
-class RecordError(ValueError):
-    """A single record could not be parsed. Dead-lettered, never fatal."""
-
-
-def parse_results(payload: dict) -> tuple[list[ResultRecord], list[tuple[dict, str]]]:
-    """Pull result records out of one page, keeping their race context.
-
-    Returns (records, failures). Failures carry the offending fragment and a
-    reason so they can be dead-lettered rather than lost — ARCHITECTURE §5:
-    one bad record must never kill a run, and must never vanish silently.
-
-    The grain keys come from two levels: `season` and `round` live on the race,
-    `driverId` on the nested result. Phase 0 measured all three at 100%
-    presence across 26,115 rows, so a missing one is genuinely exceptional and
-    worth recording rather than defaulting.
-    """
-    records: list[ResultRecord] = []
-    failures: list[tuple[dict, str]] = []
-
-    races = payload.get("MRData", {}).get("RaceTable", {}).get("Races", [])
-    for race in races:
-        season, rnd = race.get("season"), race.get("round")
-
-        for result in race.get("Results", []):
-            driver_id = (result.get("Driver") or {}).get("driverId")
-
-            missing = [
-                name for name, value in
-                (("season", season), ("round", rnd), ("driverId", driver_id))
-                if not value
-            ]
-            if missing:
-                failures.append((result, f"missing key field(s): {', '.join(missing)}"))
-                continue
-
-            records.append(ResultRecord(
-                season=str(season), round=str(rnd), driver_id=str(driver_id),
-                payload=result,
-            ))
-
-    return records, failures
 
 
 class Warehouse:
@@ -110,42 +58,52 @@ class Warehouse:
             sql.Identifier(self.settings.schema_raw), sql.Identifier(name)
         )
 
-    # -- results ------------------------------------------------------------
+    # -- records ------------------------------------------------------------
 
-    def upsert_results(self, records: list[ResultRecord], source_key: str) -> tuple[int, int]:
-        """Upsert records, returning (inserted, updated).
+    def upsert(self, spec: EntitySpec, records: list[Record], source_key: str) -> tuple[int, int]:
+        """Upsert records for any entity, returning (inserted, updated).
 
-        Upsert rather than insert-do-nothing because F1 results are
-        *adjudicated*: a penalty or appeal amends a published result days
-        later, and do-nothing would freeze the pre-penalty version.
+        The statement is built from the entity's declared grain rather than
+        hardcoded per table — the reason every raw table has the same shape.
+
+        Upsert rather than insert-do-nothing because these sources change:
+        reference data is corrected upstream, and session results are
+        *adjudicated*, amended by penalties days after publication.
 
         The `where payload is distinct from excluded.payload` clause is the
-        subtle part. Without it, every re-run would bump `updated_at` on every
-        row, and "updated_at > ingested_at means the sport amended this result"
+        subtle part. Without it every re-run would bump `updated_at` on every
+        row, and "updated_at > ingested_at means this was amended upstream"
         would degrade into "means we ran the pipeline twice". The clause keeps
-        that signal meaningful, and makes a no-op re-run genuinely a no-op.
+        that signal meaningful and makes a no-op re-run genuinely a no-op.
         """
         if not records:
             return (0, 0)
 
+        columns = [sql.Identifier(c) for c in spec.key_columns]
+        placeholders = sql.SQL(", ").join(sql.Placeholder() * (len(columns) + 2))
+        table = self._table(spec.table)
+
         statement = sql.SQL("""
-            insert into {table} (season, round, driver_id, payload, source_key)
-            values (%s, %s, %s, %s, %s)
-            on conflict (season, round, driver_id) do update
+            insert into {table} ({columns}, payload, source_key)
+            values ({placeholders})
+            on conflict ({conflict}) do update
                set payload    = excluded.payload,
                    source_key = excluded.source_key,
                    updated_at = now()
              where {table}.payload is distinct from excluded.payload
             returning (xmax = 0) as was_insert
-        """).format(table=self._table("results"))
+        """).format(
+            table=table,
+            columns=sql.SQL(", ").join(columns),
+            placeholders=placeholders,
+            conflict=sql.SQL(", ").join(columns),
+        )
 
         inserted = updated = 0
         with self.conn.cursor() as cur:
             for record in records:
-                cur.execute(statement, (
-                    record.season, record.round, record.driver_id,
-                    Jsonb(record.payload), source_key,
-                ))
+                values = [record.keys[column] for column in spec.key_columns]
+                cur.execute(statement, (*values, Jsonb(record.payload), source_key))
                 row = cur.fetchone()
                 if row is None:
                     continue  # conflicted and payload unchanged — a true no-op
@@ -153,9 +111,9 @@ class Warehouse:
                 updated += 0 if row[0] else 1
         return inserted, updated
 
-    def count_results(self) -> int:
+    def count(self, spec: EntitySpec) -> int:
         with self.conn.cursor() as cur:
-            cur.execute(sql.SQL("select count(*) from {}").format(self._table("results")))
+            cur.execute(sql.SQL("select count(*) from {}").format(self._table(spec.table)))
             return cur.fetchone()[0]
 
     # -- dead letter --------------------------------------------------------
