@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# Run the same checks CI runs, before anything reaches the remote.
+#
+# Why this exists
+# ---------------
+# CI is advisory on this repository: blocking a merge on a status check needs
+# branch protection, which GitHub does not offer for private repos on the Free
+# plan. Two pull requests merged with red checks before that was noticed.
+#
+# A pre-push hook is not equivalent to a required check and should not be
+# described as one — `--no-verify` bypasses it, and a clone that has not run the
+# install command has no hook at all. What it does give is an *earlier* catch:
+# the broken commit never reaches the remote in the first place.
+#
+# Install (once per clone):
+#     git config core.hooksPath hooks
+#
+# The commands below invoke the console scripts (`ruff`, `pytest`) rather than
+# `python -m ruff` / `python -m pytest`, because that is exactly what
+# .github/workflows/ci.yml runs. The two forms are not interchangeable: the
+# module form inserts the working directory into sys.path and the bare form
+# does not, which is why the suite once passed locally and failed in CI at
+# collection with ModuleNotFoundError. pytest.ini now fixes that properly, but
+# this hook should keep exercising the same invocation CI does — otherwise it
+# stops being a preview of CI and becomes a second, subtly different check.
+
+set -e
+
+if [ -d ".venv/Scripts" ]; then
+    BIN=".venv/Scripts"        # Windows
+elif [ -d ".venv/bin" ]; then
+    BIN=".venv/bin"            # Linux / macOS
+else
+    echo "pre-push: no .venv found — skipping checks."
+    echo "          Create one and install requirements.txt, or CI will be your"
+    echo "          first signal that something is broken."
+    exit 0
+fi
+
+echo "pre-push: ruff"
+"$BIN/ruff" check .
+
+echo "pre-push: pytest"
+"$BIN/pytest" -q
+
+echo "pre-push: ok"

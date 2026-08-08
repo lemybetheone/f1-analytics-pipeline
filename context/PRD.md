@@ -343,6 +343,28 @@ every pull request from Phase 1 rather than at the end.
    for Phase 4 (§9, ARCHITECTURE §13). Only its *timing* changed, so nothing is
    added to the build.
 
+> **Correction, 2026-08-08.** The paragraph below claimed CI "converts [the
+> pull request] into a gate that can actually refuse a merge." **It does not,
+> and did not.** Blocking a merge on a status check requires branch protection,
+> which GitHub does not offer for **private** repositories on the Free plan. CI
+> here is **advisory**: it reports, it cannot refuse. Two pull requests (#4, #5)
+> merged with red checks before this was noticed, which is the evidence.
+>
+> The move to Phase 1 still stands — advisory CI caught a real defect that local
+> runs had missed. But the claim was overstated and is corrected here rather
+> than left to read as true.
+>
+> **What is in place instead:** a committed `pre-push` hook running the same
+> `ruff` and `pytest` commands as CI, installed with
+> `git config core.hooksPath hooks`. It stops a broken commit from reaching the
+> remote at all, which is earlier than a merge gate would. It is a **guardrail,
+> not a gate** — `--no-verify` bypasses it, and a different machine that has not
+> run the install command has no hook at all.
+>
+> **When this becomes a real gate:** when the repository goes public in Phase 4,
+> branch protection becomes available at no cost and `lint-and-test` should be
+> made a required status check on `main`.
+
 **Why it moved:** SECURITY §7 requires pull requests, and the project is solo.
 Self-review catches nothing — the author and reviewer are the same person — so
 without CI the pull-request requirement is ceremony with a real time cost. CI is
