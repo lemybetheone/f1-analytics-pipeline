@@ -29,7 +29,14 @@ import sys
 from datetime import UTC, datetime
 
 from ingestion.config import ConfigError, Settings, load
-from ingestion.entities import ENTITIES, SCOPE_GLOBAL, SCOPE_SEASON, EntitySpec, parse_records
+from ingestion.entities import (
+    ENTITIES,
+    SCOPE_GLOBAL,
+    SCOPE_RACE,
+    SCOPE_SEASON,
+    EntitySpec,
+    parse_records,
+)
 from ingestion.extract import ExtractError, Extractor
 from ingestion.load_lake import Lake
 from ingestion.load_warehouse import LoadOutcome, Warehouse, parse_lake_object
@@ -37,10 +44,11 @@ from ingestion.load_warehouse import LoadOutcome, Warehouse, parse_lake_object
 
 def extract_and_land(settings: Settings, warehouse: Warehouse, spec: EntitySpec,
                      season: str | None, resume: bool, ingestion_date: str,
-                     extractor: Extractor, lake: Lake) -> list[str]:
+                     extractor: Extractor, lake: Lake,
+                     round_: str | None = None) -> list[str]:
     """Page through the API and land each page. Returns the keys written."""
-    scope = spec.scope_label(season)
-    path = spec.path_for(season)
+    scope = spec.scope_label(season, round_)
+    path = spec.path_for(season, round_)
 
     offset = 0
     if resume:
@@ -97,10 +105,19 @@ def extract_and_land(settings: Settings, warehouse: Warehouse, spec: EntitySpec,
 
 
 def load_from_lake(settings: Settings, warehouse: Warehouse, spec: EntitySpec,
-                   season: str | None, ingestion_date: str, lake: Lake) -> LoadOutcome:
-    """Read landed objects back out of the lake and upsert them."""
-    scope = spec.scope_label(season)
-    prefix = f"{settings.lake_prefix}/{spec.name}/{ingestion_date}/{spec.name}_{scope}_"
+                   season: str | None, ingestion_date: str, lake: Lake,
+                   round_: str | None = None) -> LoadOutcome:
+    """Read landed objects back out of the lake and upsert them.
+
+    For race-scoped entities `round_` may be None, which loads every round in
+    the partition at once — the prefix simply stops at the season. That keeps
+    `--load-only` a single pass over the lake rather than one listing per round.
+    """
+    if spec.scope == SCOPE_RACE and round_ is None:
+        scope_prefix = f"season={season}_round="
+    else:
+        scope_prefix = spec.scope_label(season, round_) + "_"
+    prefix = f"{settings.lake_prefix}/{spec.name}/{ingestion_date}/{spec.name}_{scope_prefix}"
 
     keys = lake.list_keys(prefix)
     if not keys:
@@ -144,14 +161,31 @@ def run_entity(settings: Settings, warehouse: Warehouse, spec: EntitySpec,
     print(f"\n{label}")
 
     if not args.load_only:
-        try:
-            extract_and_land(settings, warehouse, spec, season, args.resume,
-                             ingestion_date, extractor, lake)
-        except ExtractError as exc:
-            print(f"    FAILED: {exc}", file=sys.stderr)
-            print("    Recorded in raw.failed_ingestions; re-run with --resume.",
-                  file=sys.stderr)
-            return None
+        # Race-scoped entities need one request per round. The schedule comes
+        # from raw.races, already loaded, so this costs no API calls — and the
+        # rounds are the ones the source actually reports rather than a range
+        # inferred from a count.
+        rounds: list[str | None]
+        if spec.scope == SCOPE_RACE:
+            rounds = list(warehouse.rounds_for_season(season))
+            if not rounds:
+                print(f"    no rounds in raw.races for {season} — "
+                      "load the reference entities first (--all-reference)",
+                      file=sys.stderr)
+                return None
+            print(f"    {len(rounds)} rounds")
+        else:
+            rounds = [None]
+
+        for round_ in rounds:
+            try:
+                extract_and_land(settings, warehouse, spec, season, args.resume,
+                                 ingestion_date, extractor, lake, round_)
+            except ExtractError as exc:
+                print(f"    FAILED at round {round_}: {exc}", file=sys.stderr)
+                print("    Recorded in raw.failed_ingestions; re-run with --resume.",
+                      file=sys.stderr)
+                return None
 
     outcome = load_from_lake(settings, warehouse, spec, season, ingestion_date, lake)
     print(f"    parsed {outcome.parsed}, inserted {outcome.inserted}, "
@@ -169,6 +203,9 @@ def main(argv: list[str] | None = None) -> int:
                              "constructors, status, races)")
     parser.add_argument("--all-season", action="store_true",
                         help="every season-scoped entity; requires --season")
+    parser.add_argument("--all-race", action="store_true",
+                        help="every race-scoped entity (pit stops, both standings); "
+                             "requires --season and a populated raw.races")
     parser.add_argument("--season", help="season for season-scoped entities")
     parser.add_argument("--load-only", action="store_true",
                         help="skip the API entirely; reload from existing lake objects")
@@ -178,8 +215,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="lake partition to write or read (default: today, UTC)")
     args = parser.parse_args(argv)
 
-    if not (args.entity or args.all_reference or args.all_season):
-        parser.error("choose --entity, --all-reference or --all-season")
+    if not (args.entity or args.all_reference or args.all_season or args.all_race):
+        parser.error("choose --entity, --all-reference, --all-season or --all-race")
 
     selected: list[EntitySpec] = []
     if args.entity:
@@ -188,8 +225,10 @@ def main(argv: list[str] | None = None) -> int:
         selected += [s for s in ENTITIES.values() if s.scope == SCOPE_GLOBAL]
     if args.all_season:
         selected += [s for s in ENTITIES.values() if s.scope == SCOPE_SEASON]
+    if args.all_race:
+        selected += [s for s in ENTITIES.values() if s.scope == SCOPE_RACE]
 
-    needs_season = [s.name for s in selected if s.scope == SCOPE_SEASON]
+    needs_season = [s.name for s in selected if s.scope in (SCOPE_SEASON, SCOPE_RACE)]
     if needs_season and not args.season:
         parser.error(f"--season is required for: {', '.join(needs_season)}")
 
@@ -214,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
 
     with Warehouse(settings) as warehouse:
         for spec in selected:
-            season = args.season if spec.scope == SCOPE_SEASON else None
+            season = args.season if spec.scope in (SCOPE_SEASON, SCOPE_RACE) else None
             if run_entity(settings, warehouse, spec, season, args,
                           ingestion_date, extractor, lake) is None:
                 failed.append(spec.name)

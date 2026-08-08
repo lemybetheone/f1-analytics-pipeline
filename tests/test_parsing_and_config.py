@@ -167,6 +167,83 @@ def test_scope_label_separates_global_from_season():
     assert ENTITIES["results"].scope_label("2024") == "season=2024"
 
 
+# --- race-scoped entities --------------------------------------------------
+
+def test_pitstops_grain_includes_the_stop_number():
+    """A driver pits more than once, so (season, round, driver) would collide.
+
+    Without `stop` in the key the upsert would silently keep only the last pit
+    stop of each race — a data loss that looks like a successful load.
+    """
+    doc = {"MRData": {"RaceTable": {"Races": [{
+        "season": "2024", "round": "1",
+        "PitStops": [
+            {"driverId": "norris", "stop": "1", "lap": "12", "duration": "22.5"},
+            {"driverId": "norris", "stop": "2", "lap": "34", "duration": "23.1"},
+        ],
+    }]}}}
+
+    records, failures = parse_records(ENTITIES["pitstops"], doc)
+
+    assert not failures
+    assert len(records) == 2
+    assert {r.keys["stop"] for r in records} == {"1", "2"}
+    # driverId is flat here, not nested under a Driver object as on results.
+    assert all(r.keys["driver_id"] == "norris" for r in records)
+
+
+def test_standings_read_from_standings_lists_not_races():
+    """Standings sit under a different envelope container entirely."""
+    doc = {"MRData": {"StandingsTable": {"StandingsLists": [{
+        "season": "2024", "round": "5",
+        "DriverStandings": [
+            {"position": "1", "points": "110", "Driver": {"driverId": "verstappen"}},
+        ],
+    }]}}}
+
+    records, failures = parse_records(ENTITIES["driverstandings"], doc)
+
+    assert not failures
+    assert records[0].keys == {"season": "2024", "round": "5", "driver_id": "verstappen"}
+
+
+def test_constructor_standings_key_off_the_constructor():
+    doc = {"MRData": {"StandingsTable": {"StandingsLists": [{
+        "season": "2024", "round": "5",
+        "ConstructorStandings": [
+            {"position": "1", "Constructor": {"constructorId": "red_bull"}},
+        ],
+    }]}}}
+
+    records, _ = parse_records(ENTITIES["constructorstandings"], doc)
+
+    assert records[0].keys["constructor_id"] == "red_bull"
+
+
+def test_race_scope_label_pads_the_round():
+    """Unpadded, round 10 sorts before round 2 in the lake listing."""
+    spec = ENTITIES["pitstops"]
+
+    assert spec.scope_label("2024", "2") == "season=2024_round=02"
+    assert spec.scope_label("2024", "10") == "season=2024_round=10"
+    assert spec.scope_label("2024", "2") < spec.scope_label("2024", "10")
+
+
+def test_race_scoped_entity_requires_both_season_and_round():
+    spec = ENTITIES["driverstandings"]
+
+    with pytest.raises(ValueError, match="season and a round"):
+        spec.path_for("2024")
+
+    assert spec.path_for("2024", "5") == "2024/5/driverstandings"
+
+
+def test_each_race_scoped_entity_has_a_distinct_table():
+    """Two entities sharing a table would upsert over each other."""
+    tables = [s.table for s in ENTITIES.values()]
+    assert len(tables) == len(set(tables)), "entities must not share a raw table"
+
+
 # --- lake keys -------------------------------------------------------------
 
 def test_lake_key_is_deterministic_and_sorts_correctly():

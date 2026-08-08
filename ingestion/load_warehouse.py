@@ -111,6 +111,21 @@ class Warehouse:
                 updated += 0 if row[0] else 1
         return inserted, updated
 
+    def rounds_for_season(self, season: str) -> list[str]:
+        """Rounds in a season, read from `raw.races`.
+
+        Race-scoped endpoints need a round per request, and the schedule is
+        already in the warehouse from the reference load — so iterating rounds
+        costs no extra API calls against a 500/hour budget. It also means the
+        rounds are exactly the ones the source reports, rather than a range
+        guessed from a count.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("select round from {} where season = %s order by round::int")
+                .format(self._table("races")), (season,))
+            return [row[0] for row in cur.fetchall()]
+
     def count(self, spec: EntitySpec) -> int:
         with self.conn.cursor() as cur:
             cur.execute(sql.SQL("select count(*) from {}").format(self._table(spec.table)))

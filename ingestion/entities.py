@@ -23,6 +23,7 @@ from typing import Any
 #            Not implemented yet; see the note at the bottom of this module.
 SCOPE_GLOBAL = "global"
 SCOPE_SEASON = "season"
+SCOPE_RACE = "race"
 
 
 @dataclass(frozen=True)
@@ -46,16 +47,31 @@ class EntitySpec:
     # a missing value is genuinely exceptional and gets dead-lettered.
     keys: tuple[tuple[str, str], ...] = ()
 
-    def path_for(self, season: str | None = None) -> str:
+    def path_for(self, season: str | None = None, round_: str | None = None) -> str:
+        if self.scope == SCOPE_RACE:
+            if not season or not round_:
+                raise ValueError(f"{self.name} requires a season and a round")
+            return self.path_template.format(season=season, round=round_)
         if self.scope == SCOPE_SEASON:
             if not season:
                 raise ValueError(f"{self.name} requires a season")
             return self.path_template.format(season=season)
         return self.path_template
 
-    def scope_label(self, season: str | None = None) -> str:
-        """Identifies the unit of work in checkpoints and lake keys."""
-        return f"season={season}" if self.scope == SCOPE_SEASON else "all"
+    def scope_label(self, season: str | None = None, round_: str | None = None) -> str:
+        """Identifies the unit of work in checkpoints and lake keys.
+
+        Race-scoped entities get one label — and therefore one checkpoint —
+        per round. That is deliberate: each round is an independent unit of
+        work, so an interrupted season resumes at the round it stopped on
+        rather than restarting the season. Rounds are zero-padded so lake keys
+        sort in race order; unpadded, round 10 sorts before round 2.
+        """
+        if self.scope == SCOPE_RACE:
+            return f"season={season}_round={int(round_):02d}"
+        if self.scope == SCOPE_SEASON:
+            return f"season={season}"
+        return "all"
 
     @property
     def key_columns(self) -> tuple[str, ...]:
@@ -118,14 +134,42 @@ ENTITIES: dict[str, EntitySpec] = {
         child_key="SprintResults", parent_fields=("season", "round"),
         keys=(("season", "season"), ("round", "round"), ("driver_id", "Driver.driverId")),
     ),
+    # --- race-scoped: one request per round --------------------------------
+    # These three cannot be fetched season-wide. Pit stops return HTTP 400
+    # without a round. Season-scoped standings return only the *final* round
+    # while reporting a total that looks like every round — the more dangerous
+    # failure, because it succeeds and silently gives you one row set instead
+    # of twenty-four.
+    #
+    # Rounds come from `raw.races`, which the reference load already populated,
+    # so iterating them costs no extra API calls.
+    "pitstops": EntitySpec(
+        name="pitstops", table="pitstops", path_template="{season}/{round}/pitstops",
+        scope=SCOPE_RACE,
+        container=("MRData", "RaceTable", "Races"),
+        child_key="PitStops", parent_fields=("season", "round"),
+        # `stop` is part of the grain: a driver pits more than once per race, so
+        # (season, round, driver) would collide. Note driverId is flat here, not
+        # nested under a Driver object as it is on results.
+        keys=(("season", "season"), ("round", "round"),
+              ("driver_id", "driverId"), ("stop", "stop")),
+    ),
+    "driverstandings": EntitySpec(
+        name="driverstandings", table="driver_standings",
+        path_template="{season}/{round}/driverstandings", scope=SCOPE_RACE,
+        container=("MRData", "StandingsTable", "StandingsLists"),
+        child_key="DriverStandings", parent_fields=("season", "round"),
+        keys=(("season", "season"), ("round", "round"), ("driver_id", "Driver.driverId")),
+    ),
+    "constructorstandings": EntitySpec(
+        name="constructorstandings", table="constructor_standings",
+        path_template="{season}/{round}/constructorstandings", scope=SCOPE_RACE,
+        container=("MRData", "StandingsTable", "StandingsLists"),
+        child_key="ConstructorStandings", parent_fields=("season", "round"),
+        keys=(("season", "season"), ("round", "round"),
+              ("constructor_id", "Constructor.constructorId")),
+    ),
 }
-
-# Not yet implemented, and deliberately absent rather than half-declared:
-# `pitstops`, `driverstandings` and `constructorstandings` are race-scoped —
-# pit stops return HTTP 400 without a round, and season-scoped standings return
-# only the final round while reporting a total that looks like all of them.
-# They need a scope that iterates rounds, which changes checkpointing, so they
-# get their own change rather than a row here that would not work.
 
 
 @dataclass(frozen=True)
