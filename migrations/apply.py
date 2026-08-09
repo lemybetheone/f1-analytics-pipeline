@@ -112,6 +112,12 @@ def applied_versions(conn) -> dict[str, tuple[str, str]]:
 
 
 def main() -> int:
+    # Windows consoles default to cp1252 and cannot encode the em-dashes used
+    # below; `replace` degrades them rather than raising mid-migration.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--status", action="store_true", help="show state and exit")
     parser.add_argument("--dry-run", action="store_true", help="list pending, apply nothing")
