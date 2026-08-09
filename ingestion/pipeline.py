@@ -194,7 +194,22 @@ def run_entity(settings: Settings, warehouse: Warehouse, spec: EntitySpec,
     return outcome
 
 
+def use_utf8_console() -> None:
+    """Stop console output dying on a non-UTF-8 terminal.
+
+    Windows consoles default to cp1252, which cannot encode the arrows and
+    em-dashes used in progress output — a `UnicodeEncodeError` that kills an
+    otherwise healthy run at the moment it tries to report success. `replace`
+    degrades those characters to `?` rather than raising, because a slightly
+    ugly log beats a crashed pipeline.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    use_utf8_console()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--entity", choices=sorted(ENTITIES),
                         help="a single entity to ingest")

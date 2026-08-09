@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -240,6 +241,12 @@ def check_lake(env: dict[str, str]) -> bool:
 
 
 def main() -> int:
+    # Windows consoles default to cp1252 and cannot encode the em-dashes used
+    # in these messages; `replace` degrades them rather than raising.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", default=str(ENV_FILE))
     parser.add_argument("--warehouse-only", action="store_true")
