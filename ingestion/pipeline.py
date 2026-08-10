@@ -39,7 +39,12 @@ from ingestion.entities import (
 )
 from ingestion.extract import ExtractError, Extractor
 from ingestion.load_lake import Lake
-from ingestion.load_warehouse import LoadOutcome, Warehouse, parse_lake_object
+from ingestion.load_warehouse import (
+    LoadOutcome,
+    Warehouse,
+    WarehouseBudget,
+    parse_lake_object,
+)
 
 
 def extract_and_land(settings: Settings, warehouse: Warehouse, spec: EntitySpec,
@@ -49,6 +54,10 @@ def extract_and_land(settings: Settings, warehouse: Warehouse, spec: EntitySpec,
     """Page through the API and land each page. Returns the keys written."""
     scope = spec.scope_label(season, round_)
     path = spec.path_for(season, round_)
+
+    # Tag calls with the entity spending them, so the log can answer "what
+    # consumed the allowance" rather than only "the allowance was consumed".
+    extractor.entity = spec.name
 
     offset = 0
     if resume:
@@ -271,13 +280,19 @@ def main(argv: list[str] | None = None) -> int:
     print(f"lake:      s3://{settings.lake_bucket}/{settings.lake_prefix}")
     print(f"partition: {ingestion_date}")
 
-    # One extractor across all entities so the rate budget is shared. A limiter
-    # per entity would let six entities each spend the full hourly allowance.
-    extractor = Extractor(settings)
+    # The budget lives in the warehouse, not in this process. A limiter per
+    # process would let each of six subprocesses spend the full hourly
+    # allowance, and a resumed backfill would start its count from zero.
+    budget = WarehouseBudget(settings)
+    pruned = budget.prune()
+    if pruned:
+        print(f"pruned {pruned} api_call_log rows older than the window")
+
+    extractor = Extractor(settings, budget=budget)
     lake = Lake(settings)
     failed: list[str] = []
 
-    with Warehouse(settings) as warehouse:
+    with budget, Warehouse(settings) as warehouse:
         for spec in selected:
             season = args.season if spec.scope in (SCOPE_SEASON, SCOPE_RACE) else None
             if run_entity(settings, warehouse, spec, season, args,
@@ -285,9 +300,13 @@ def main(argv: list[str] | None = None) -> int:
                 failed.append(spec.name)
 
         unresolved = warehouse.unresolved_failures()
+        # Read inside the block: the budget owns a connection that closes on
+        # exit, and this figure comes from the shared log rather than from
+        # this process's own count.
+        calls_used = extractor.limiter.used_in_window
 
-    print(f"\napi calls used: {extractor.limiter.used_in_window}"
-          f"/{settings.requests_per_hour} in the last hour")
+    print(f"\napi calls used: {calls_used}/{settings.requests_per_hour} "
+          "in the last hour (all processes)")
     if unresolved:
         print(f"! {unresolved} unresolved dead-letter rows — investigate")
     if failed:
