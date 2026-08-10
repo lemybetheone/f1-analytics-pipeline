@@ -7,11 +7,14 @@ parsed halfway both look like success.
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from ingestion.config import ConfigError, load, read_env_file
 from ingestion.entities import ENTITIES, parse_records
 from ingestion.load_lake import Lake
+from ingestion.load_warehouse import select_run_rounds
 from tests.test_extract import make_settings
 
 RESULTS = ENTITIES["results"]
@@ -242,6 +245,51 @@ def test_each_race_scoped_entity_has_a_distinct_table():
     """Two entities sharing a table would upsert over each other."""
     tables = [s.table for s in ENTITIES.values()]
     assert len(tables) == len(set(tables)), "entities must not share a raw table"
+
+
+# --- skipping races that have not happened ---------------------------------
+
+TODAY = date(2026, 8, 8)
+
+
+def test_future_races_are_not_fetched():
+    """`raw.races` carries the forward schedule; those races have no results.
+
+    Requesting them wastes a call against a 500/hour budget and marks a
+    checkpoint complete for a round that will have data later.
+    """
+    rows = [("1", "2026-03-08"), ("2", "2026-03-22"),
+            ("3", "2026-11-15"), ("4", "2026-12-06")]
+
+    assert select_run_rounds(rows, TODAY) == ["1", "2"]
+
+
+def test_a_race_today_counts_as_run():
+    assert select_run_rounds([("1", "2026-08-08")], TODAY) == ["1"]
+
+
+def test_missing_date_is_kept_not_skipped():
+    """75 years of history: an absent date is a gap in an old record, not a
+    race in the future. Skipping it would lose real data silently."""
+    rows = [("1", None), ("2", ""), ("3", "1950-05-13")]
+
+    assert select_run_rounds(rows, TODAY) == ["1", "2", "3"]
+
+
+def test_unparseable_date_is_kept():
+    assert select_run_rounds([("1", "not-a-date")], TODAY) == ["1"]
+
+
+def test_include_unrun_overrides_the_filter():
+    rows = [("1", "2026-03-08"), ("2", "2026-12-06")]
+
+    assert select_run_rounds(rows, TODAY, include_unrun=True) == ["1", "2"]
+
+
+def test_a_fully_past_season_keeps_every_round():
+    rows = [(str(n), f"2024-{n:02d}-01") for n in range(1, 13)]
+
+    assert len(select_run_rounds(rows, TODAY)) == 12
 
 
 # --- lake keys -------------------------------------------------------------

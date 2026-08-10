@@ -143,10 +143,14 @@ def task_ingest(args) -> None:
     if not args.skip_reference:
         run([*base, "--all-reference"], why="reference data (all seasons)")
 
-    run([*base, "--all-season", "--season", args.season],
-        why=f"session facts for {args.season}")
-    run([*base, "--all-race", "--season", args.season],
-        why=f"pit stops and standings for {args.season} (one call per round)")
+    # Newest first (ARCHITECTURE decision 21): a dashboard needs one complete
+    # recent season, not seventy partial ones, so the most useful data lands in
+    # the first minutes of a long run rather than the last.
+    for season in sorted(args.season, reverse=True):
+        run([*base, "--all-season", "--season", season],
+            why=f"session facts for {season}")
+        run([*base, "--all-race", "--season", season],
+            why=f"pit stops and standings for {season} (one call per round)")
 
 
 TASKS = {
@@ -167,7 +171,8 @@ def main() -> int:
     for name in TASKS:
         task_parser = sub.add_parser(name, help=TASKS[name].__doc__)
         if name == "ingest":
-            task_parser.add_argument("--season", default=DEFAULT_SEASON)
+            task_parser.add_argument("--season", nargs="+", default=[DEFAULT_SEASON],
+                                     help="one or more seasons; loaded newest first")
             task_parser.add_argument("--skip-reference", action="store_true",
                                      help="reference data is already loaded")
         if name == "migrate":

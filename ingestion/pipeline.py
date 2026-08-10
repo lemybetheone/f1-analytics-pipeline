@@ -168,12 +168,23 @@ def run_entity(settings: Settings, warehouse: Warehouse, spec: EntitySpec,
         rounds: list[str | None]
         if spec.scope == SCOPE_RACE:
             rounds = list(warehouse.rounds_for_season(season))
+            scheduled = len(warehouse.rounds_for_season(season, include_unrun=True))
             if not rounds:
+                if scheduled:
+                    print(f"    {scheduled} rounds scheduled for {season}, none run yet "
+                          "— nothing to fetch")
+                    return LoadOutcome()
                 print(f"    no rounds in raw.races for {season} — "
                       "load the reference entities first (--all-reference)",
                       file=sys.stderr)
                 return None
-            print(f"    {len(rounds)} rounds")
+            # Say so when rounds are skipped. A silently shorter run looks
+            # identical to a complete one.
+            if scheduled > len(rounds):
+                print(f"    {len(rounds)} of {scheduled} rounds run "
+                      f"({scheduled - len(rounds)} not yet raced, skipped)")
+            else:
+                print(f"    {len(rounds)} rounds")
         else:
             rounds = [None]
 
