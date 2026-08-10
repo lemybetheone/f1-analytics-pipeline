@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from typing import Any
 
 import psycopg
@@ -111,20 +112,32 @@ class Warehouse:
                 updated += 0 if row[0] else 1
         return inserted, updated
 
-    def rounds_for_season(self, season: str) -> list[str]:
-        """Rounds in a season, read from `raw.races`.
+    def rounds_for_season(self, season: str, today: date | None = None,
+                          include_unrun: bool = False) -> list[str]:
+        """Rounds in a season that have actually been run, from `raw.races`.
 
         Race-scoped endpoints need a round per request, and the schedule is
         already in the warehouse from the reference load — so iterating rounds
-        costs no extra API calls against a 500/hour budget. It also means the
-        rounds are exactly the ones the source reports, rather than a range
-        guessed from a count.
+        costs no extra API calls against a 500/hour budget, and the rounds are
+        exactly the ones the source reports rather than a range guessed from a
+        count.
+
+        The schedule includes **future** races: `raw.races` spans 1950–2026 and
+        the current season is only partly run. Requesting results for a race
+        that has not happened returns an empty payload — a wasted call, and a
+        checkpoint marked complete for a round that will have data later.
+
+        The date filtering happens in `select_run_rounds` rather than in SQL so
+        the rule is testable without a database.
         """
         with self.conn.cursor() as cur:
             cur.execute(
-                sql.SQL("select round from {} where season = %s order by round::int")
+                sql.SQL("select round, payload->>'date' from {} "
+                        "where season = %s order by round::int")
                 .format(self._table("races")), (season,))
-            return [row[0] for row in cur.fetchall()]
+            rows = cur.fetchall()
+
+        return select_run_rounds(rows, today or datetime.now(UTC).date(), include_unrun)
 
     def count(self, spec: EntitySpec) -> int:
         with self.conn.cursor() as cur:
@@ -195,6 +208,32 @@ class Warehouse:
 
     def rollback(self) -> None:
         self.conn.rollback()
+
+
+def select_run_rounds(rows: list[tuple[str, str | None]], today: date,
+                      include_unrun: bool = False) -> list[str]:
+    """Keep the rounds that have been run on or before `today`.
+
+    A race whose date is **missing** is kept rather than skipped. The source
+    has 75 years of history and an absent date is far more likely to be a gap
+    in an old record than a race in the future — and skipping it would lose
+    real data silently, which is the worse failure of the two.
+
+    An unparseable date is treated the same way, for the same reason.
+    """
+    kept: list[str] = []
+
+    for round_, race_date in rows:
+        if include_unrun or not race_date:
+            kept.append(round_)
+            continue
+        try:
+            if date.fromisoformat(race_date) <= today:
+                kept.append(round_)
+        except ValueError:
+            kept.append(round_)
+
+    return kept
 
 
 def parse_lake_object(content: bytes) -> dict:
