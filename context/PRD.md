@@ -12,8 +12,8 @@
 | | |
 |---|---|
 | **Owner** | Lemuel Calinog |
-| **Status** | Phase 0 — discovery in progress (source validated) |
-| **Last updated** | 2026-08-02 |
+| **Status** | Phase 1 complete (backfill deferred) — Phase 2 next |
+| **Last updated** | 2026-08-09 |
 | **Target completion** | _(set a date)_ |
 
 ---
@@ -85,9 +85,12 @@ the author can **explain and defend in an interview**.
 The MVP is **done** when all of the following are true. Anything beyond this is
 enhancement, not MVP.
 
-- [ ] Ingestion runs end-to-end from a single command, idempotently.
-- [ ] Raw data lands in object storage, partitioned by date.
-- [ ] Warehouse loads from the lake, not from memory.
+- [x] Ingestion runs end-to-end from a single command, idempotently.
+      `python tasks.py ingest --season 2026 2025` — reference data, session
+      facts and race-scoped entities in dependency order. Re-running inserts
+      and updates nothing.
+- [x] Raw data lands in object storage, partitioned by ingestion date.
+- [x] Warehouse loads from the lake, not from memory.
 - [ ] Staging models exist for every source, each with a tested grain.
 - [ ] A star schema with ≥3 dimensions and ≥2 fact tables.
 - [ ] Data quality tests pass on every model (grain + key integrity minimum).
@@ -256,7 +259,7 @@ division on the measured totals.
 | Phase | Focus | Exit criteria |
 |---|---|---|
 | **0 — Discovery** | Validate every endpoint's real payload; prove storage + warehouse connectivity; confirm rate limits & pagination | Documented source inventory; smoke test connects to both systems |
-| **1 — Ingestion** | API → lake → warehouse raw layer; **CI gate live** (moved from Phase 4, see Change control) | Raw tables populated; idempotent re-run proven; CI green on every PR |
+| **1 — Ingestion** ✅ | API → lake → warehouse raw layer; **CI gate live** (moved from Phase 4, see Change control) | Raw tables populated; idempotent re-run proven; CI green on every PR — **met 2026-08-09.** All 12 in-scope endpoints ingest. Reference data covers all of history; facts cover 2024–2026 (59 of 1,172 races). The historical backfill is deliberately deferred — see ARCHITECTURE decision 25 |
 | **2 — Modelling** | Staging + star schema + tests | All models built, all tests green |
 | **3 — Orchestration** | Scheduler/DAG, alerting, incremental | One successful scheduled end-to-end run |
 | **4 — Serving & polish** | Dashboard, CI, docs, README | MVP checklist complete |
