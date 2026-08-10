@@ -23,7 +23,7 @@ import time
 from collections import deque
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import requests
 
@@ -69,31 +69,76 @@ class Page:
         return self.offset + self.limit >= self.total
 
 
+class BudgetStore(Protocol):
+    """Where spent API calls are recorded, so the budget can be counted.
+
+    Deliberately narrow so `extract` stays free of any database dependency: the
+    warehouse-backed implementation lives in `load_warehouse`, and this module
+    never imports psycopg. Both implementations answer the same two questions,
+    and neither exposes a clock — the limiter must not have to reconcile
+    `time.monotonic()` with a database's `now()`.
+    """
+
+    def usage(self, window_seconds: int) -> tuple[int, float]:
+        """(calls inside the window, seconds until the oldest leaves it)."""
+        ...
+
+    def record(self, entity: str | None = None) -> None:
+        """Record that a call has just been spent."""
+        ...
+
+
+class InMemoryBudget:
+    """Per-process budget. Correct for a single run, blind across processes."""
+
+    def __init__(self) -> None:
+        self._calls: deque[float] = deque()
+
+    def _prune(self, window_seconds: int) -> None:
+        cutoff = time.monotonic() - window_seconds
+        while self._calls and self._calls[0] <= cutoff:
+            self._calls.popleft()
+
+    def usage(self, window_seconds: int) -> tuple[int, float]:
+        self._prune(window_seconds)
+        if not self._calls:
+            return (0, 0.0)
+        seconds_until_free = window_seconds - (time.monotonic() - self._calls[0])
+        return (len(self._calls), max(seconds_until_free, 0.0))
+
+    def record(self, entity: str | None = None) -> None:
+        self._calls.append(time.monotonic())
+
+
 class RateLimiter:
     """Enforce both the burst and the sustained budget.
 
     The API publishes 4 requests/second and 500/hour and returns no headers, so
     compliance is entirely on the client. Exceeding it risks being blocked
-    without notice, which the terms explicitly permit.
+    without notice, which the terms explicitly permit — and the source is the
+    one dependency that cannot be rebuilt from the lake.
 
     A sliding window rather than a fixed one: a fixed hourly window lets you
     spend the whole budget in the last minute of one hour and the first minute
     of the next, which is 1,000 requests in two minutes and exactly the burst
     the limit exists to prevent.
+
+    The **sustained** budget is delegated to a `BudgetStore` so it can be shared
+    across processes and survive a restart. The **burst** limit stays in-process
+    on purpose: it exists to avoid hammering the server within a second, a
+    round-trip to a shared store per request would cost more than it protects,
+    and the sustained budget is the one that actually binds.
     """
 
-    def __init__(self, requests_per_hour: int, burst_per_second: int) -> None:
+    def __init__(self, requests_per_hour: int, burst_per_second: int,
+                 store: BudgetStore | None = None) -> None:
         self._window_seconds = 3600
         self._max_in_window = requests_per_hour
         self._min_interval = 1 / burst_per_second
-        self._calls: deque[float] = deque()
+        self._store: BudgetStore = store or InMemoryBudget()
         self._last_call = 0.0
 
-    def _prune(self, now: float) -> None:
-        while self._calls and now - self._calls[0] >= self._window_seconds:
-            self._calls.popleft()
-
-    def acquire(self) -> float:
+    def acquire(self, entity: str | None = None) -> float:
         """Block until a request may be made. Returns seconds waited."""
         waited = 0.0
 
@@ -102,34 +147,34 @@ class RateLimiter:
             time.sleep(self._min_interval - gap)
             waited += self._min_interval - gap
 
-        now = time.monotonic()
-        self._prune(now)
-        if len(self._calls) >= self._max_in_window:
-            # Wait for the oldest call to age out of the window.
-            sleep_for = self._window_seconds - (now - self._calls[0]) + 0.01
+        used, seconds_until_free = self._store.usage(self._window_seconds)
+        if used >= self._max_in_window:
+            # Wait for the oldest call to age out of the window. The small
+            # margin avoids waking a hair early and immediately sleeping again.
+            sleep_for = max(seconds_until_free, 0.0) + 0.01
             time.sleep(sleep_for)
             waited += sleep_for
-            self._prune(time.monotonic())
 
-        now = time.monotonic()
-        self._calls.append(now)
-        self._last_call = now
+        self._store.record(entity)
+        self._last_call = time.monotonic()
         return waited
 
     @property
     def used_in_window(self) -> int:
-        self._prune(time.monotonic())
-        return len(self._calls)
+        return self._store.usage(self._window_seconds)[0]
 
 
 class Extractor:
     """Fetches pages from the source API."""
 
-    def __init__(self, settings: Settings, session: requests.Session | None = None) -> None:
+    def __init__(self, settings: Settings, session: requests.Session | None = None,
+                 budget: BudgetStore | None = None, entity: str | None = None) -> None:
         self.settings = settings
+        self.entity = entity
         self.session = session or requests.Session()
         self.session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/json"})
-        self.limiter = RateLimiter(settings.requests_per_hour, settings.burst_per_second)
+        self.limiter = RateLimiter(settings.requests_per_hour,
+                                   settings.burst_per_second, store=budget)
 
     def fetch_page(self, path: str, offset: int = 0, limit: int = PAGE_SIZE) -> Page:
         """Fetch one page, retrying only what is worth retrying."""
@@ -138,7 +183,9 @@ class Extractor:
         last_error: str | None = None
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
-            self.limiter.acquire()
+            # Every attempt counts against the budget, including retries — the
+            # server charges for a request whether or not it answers usefully.
+            self.limiter.acquire(self.entity)
             try:
                 response = self.session.get(url, params=params, timeout=30)
             except requests.RequestException as exc:

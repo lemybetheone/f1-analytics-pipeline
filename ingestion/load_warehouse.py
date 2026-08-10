@@ -210,6 +210,80 @@ class Warehouse:
         self.conn.rollback()
 
 
+class WarehouseBudget:
+    """Rate budget shared across processes, backed by `raw.api_call_log`.
+
+    Uses its **own connection**, deliberately. Recording a call has to be
+    visible to other processes immediately, which means committing — and
+    committing on the pipeline's connection would also commit whatever
+    half-finished upsert happened to be in flight. A second connection costs
+    almost nothing and removes that coupling entirely.
+
+    Autocommit for the same reason: a call that is recorded but uncommitted is
+    a call no other process can see, which is the whole failure being fixed.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.conn = psycopg.connect(
+            host=settings.warehouse_host,
+            port=settings.warehouse_port,
+            dbname=settings.warehouse_database,
+            user=settings.warehouse_user,
+            password=settings.warehouse_password,
+            connect_timeout=15,
+            autocommit=True,
+        )
+        self._table = sql.SQL("{}.{}").format(
+            sql.Identifier(settings.schema_raw), sql.Identifier("api_call_log"))
+
+    def usage(self, window_seconds: int) -> tuple[int, float]:
+        """(calls inside the window, seconds until the oldest leaves it).
+
+        Both numbers come from the database's clock in a single statement, so
+        they cannot disagree with each other or drift against a local clock.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("""
+                    select count(*),
+                           coalesce(extract(epoch from (
+                               min(called_at) + make_interval(secs => %s) - now()
+                           )), 0)
+                    from {} where called_at > now() - make_interval(secs => %s)
+                """).format(self._table), (window_seconds, window_seconds))
+            count, seconds = cur.fetchone()
+            return (int(count), max(float(seconds), 0.0))
+
+    def record(self, entity: str | None = None) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("insert into {} (entity) values (%s)").format(self._table),
+                (entity,))
+
+    def prune(self, keep_seconds: int = 7200) -> int:
+        """Drop rows too old to affect the window. Returns rows removed.
+
+        Nothing outside the trailing hour can influence the budget, so the
+        table would otherwise grow without bound for no benefit. Twice the
+        window is kept as headroom for inspecting a throttling incident.
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(
+                sql.SQL("delete from {} where called_at < now() - make_interval(secs => %s)")
+                .format(self._table), (keep_seconds,))
+            return cur.rowcount
+
+    def close(self) -> None:
+        self.conn.close()
+
+    def __enter__(self) -> WarehouseBudget:
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
+
+
 def select_run_rounds(rows: list[tuple[str, str | None]], today: date,
                       include_unrun: bool = False) -> list[str]:
     """Keep the rounds that have been run on or before `today`.

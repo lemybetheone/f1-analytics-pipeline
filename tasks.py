@@ -127,15 +127,10 @@ def task_ingest(args) -> None:
     entities read their rounds from `raw.races`, so running them against an
     empty reference layer would find no rounds and do nothing.
 
-    KNOWN LIMITATION — the rate budget is per-process. Each `ingestion.pipeline`
-    invocation below starts a fresh RateLimiter, so a full ingest spends ~85
-    calls while no single process sees more than ~72. Within one invocation the
-    limiter is shared across entities and correct; across invocations it is
-    blind. That is tolerable at this size and *not* tolerable for the historical
-    backfill, which spans hours and will be restarted: a resumed run would reset
-    its own view of the budget and could exceed 500/hour without noticing.
-    Fixing it means persisting call timestamps outside the process — recorded
-    here so the backfill does not inherit the assumption silently.
+    Each step below is a separate process, which used to mean a separate rate
+    budget: a full ingest spent ~85 calls while no single process saw more than
+    ~72. The budget now lives in `raw.api_call_log`, so every process and every
+    resumed run counts against the same hourly allowance.
     """
     python = require_venv()
     base = [str(python), "-m", "ingestion.pipeline"]
