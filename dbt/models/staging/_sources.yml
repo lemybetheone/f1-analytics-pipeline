@@ -1,0 +1,124 @@
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Source payloads exactly as the API returned them, landed by the ingestion
+      pipeline. Every table carries its grain keys as columns, the untouched
+      payload as jsonb, the lake object it was loaded from, and the
+      ingested/updated split that makes an upstream amendment visible.
+    schema: raw
+
+    # Freshness is measured against when we last *loaded* a row, not when the
+    # race happened — the question being answered is "is ingestion still
+    # running", not "has F1 raced recently".
+    loaded_at_field: ingested_at
+    freshness:
+      warn_after: {count: 36, period: hour}
+      error_after: {count: 7, period: day}
+
+    tables:
+      # --- reference data: complete history, upserted -----------------------
+      - name: seasons
+        description: "Grain: season. 77 rows, 1950 to 2026."
+        columns:
+          - name: season
+            description: "Four-digit year. Arrives as text, cast at staging."
+            data_tests: [not_null, unique]
+
+      - name: circuits
+        description: "Grain: circuit_id. 78 rows."
+        columns:
+          - name: circuit_id
+            data_tests: [not_null, unique]
+
+      - name: drivers
+        description: "Grain: driver_id. 881 rows, all drivers in F1 history."
+        columns:
+          - name: driver_id
+            data_tests: [not_null, unique]
+
+      - name: constructors
+        description: >
+          Grain: constructor_id. 214 rows. Type 1 downstream — Phase 0 found no
+          constructor_id ever carrying two names, so rebrands are separate ids
+          upstream and there is no attribute for SCD2 to track.
+        columns:
+          - name: constructor_id
+            data_tests: [not_null, unique]
+
+      - name: status
+        description: >
+          Grain: status_id. 136 distinct finishing statuses — too many for an
+          accepted_values test, which is why SCHEMA §4 groups them into
+          dim_status rather than enumerating them.
+        columns:
+          - name: status_id
+            data_tests: [not_null, unique]
+
+      - name: races
+        description: >
+          Grain: (season, round). 1,172 rows including the forward schedule —
+          12 races are scheduled but not yet run, so anything joining facts to
+          this table will legitimately find races with no results.
+        columns:
+          - name: season
+            data_tests: [not_null]
+          - name: round
+            data_tests: [not_null]
+
+      # --- session facts: 2024-2026 loaded, backfill deferred ---------------
+      - name: results
+        description: >
+          Grain: (season, round, driver_id). The core fact source. Upserted
+          rather than insert-only because F1 results are adjudicated — a
+          stewards' penalty amends a published result days later.
+        columns:
+          - name: season
+            data_tests: [not_null]
+          - name: round
+            data_tests: [not_null]
+          - name: driver_id
+            data_tests: [not_null]
+
+      - name: qualifying
+        description: >
+          Grain: (season, round, driver_id). Q1 present for all, Q2 for ~76%,
+          Q3 for ~51% — elimination, not missing data, so those must never
+          carry a not_null test.
+        columns:
+          - name: driver_id
+            data_tests: [not_null]
+
+      - name: sprint
+        description: "Grain: (season, round, driver_id). Only sprint weekends produce rows."
+        columns:
+          - name: driver_id
+            data_tests: [not_null]
+
+      # --- race-scoped: one request per round -------------------------------
+      - name: pitstops
+        description: >
+          Grain: (season, round, driver_id, stop). `stop` is load-bearing in
+          the key: 2,081 rows span far fewer driver-races, so without it nearly
+          half the rows would collide.
+        columns:
+          - name: driver_id
+            data_tests: [not_null]
+          - name: stop
+            data_tests: [not_null]
+
+      - name: driver_standings
+        description: >
+          Grain: (season, round, driver_id). Periodic snapshot whose snapshot
+          key is `round`, already part of the natural key — which is why no
+          snapshot_date column is needed.
+        columns:
+          - name: driver_id
+            data_tests: [not_null]
+
+      - name: constructor_standings
+        description: "Grain: (season, round, constructor_id). Periodic snapshot."
+        columns:
+          - name: constructor_id
+            data_tests: [not_null]

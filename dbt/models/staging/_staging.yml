@@ -1,0 +1,64 @@
+version: 2
+
+models:
+  - name: stg_drivers
+    description: >
+      One row per driver, all of F1 history (881 rows). Types cast from the
+      source's all-text payload; no joins or filtering.
+
+      **Grain: driver_id.**
+    columns:
+      - name: driver_id
+        description: "Natural key from the source. Stable across seasons."
+        # The single highest-value test in the project: a grain that silently
+        # duplicates makes every downstream count wrong, and nothing else
+        # catches it.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: full_name
+        description: "First and last name joined, so every consumer spells it the same way."
+
+      - name: date_of_birth
+        description: >
+          Cast from an ISO date string. **Legitimately null for 16 of 881
+          drivers** (1.8%) — deliberately untested.
+
+          Those 16 are not old drivers, as we first assumed. They are modern
+          reserve and test drivers (Arthur Leclerc, Felipe Drugovich, Colton
+          Herta, Dino Beganovic and others) who are registered with the sport
+          but have never started a race — they appear in no results at all.
+          Their records carry a name and nothing else.
+
+          A `not_null` test here failed on the first build. It was written from
+          the Phase 0 nullability profile, which sampled `2024/drivers` — 25
+          current race drivers — rather than all 881. Same sampling error as
+          the `FastestLap` case, in a different disguise.
+
+      - name: nationality
+        description: >
+          Free text; not a controlled vocabulary. Null for the same 16
+          non-racing drivers, so untested for the same reason.
+
+      - name: driver_code
+        description: >
+          Three-letter TV abbreviation (VER, HAM). **Legitimately null** for
+          older drivers — deliberately untested. SECURITY §4: testing a column
+          that is genuinely optional produces failures that mean nothing and
+          trains you to ignore the suite.
+
+      - name: permanent_number
+        description: >
+          Career number. **Legitimately null** — permanent numbers only exist
+          from 2014, so most of the 881 rows have none. Deliberately untested.
+
+      - name: source_key
+        description: "Lake object this row was loaded from. Lineage back to the raw JSON."
+        data_tests:
+          - not_null
+
+      - name: ingested_at
+        description: "When the row was first loaded."
+        data_tests:
+          - not_null

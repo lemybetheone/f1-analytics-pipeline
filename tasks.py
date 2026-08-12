@@ -22,12 +22,14 @@ Usage
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
+DBT_DIR = REPO_ROOT / "dbt"
 VENV = REPO_ROOT / ".venv"
 IS_WINDOWS = platform.system() == "Windows"
 BIN = VENV / ("Scripts" if IS_WINDOWS else "bin")
@@ -39,12 +41,36 @@ def venv_exe(name: str) -> Path:
     return BIN / (f"{name}.exe" if IS_WINDOWS else name)
 
 
-def run(command: list[str], *, why: str) -> None:
+def run(command: list[str], *, why: str, env: dict[str, str] | None = None,
+        cwd: Path | None = None) -> None:
     """Run a command, echoing it so the task runner never hides what it does."""
     print(f"\n>> {why}\n   {' '.join(str(part) for part in command)}")
-    result = subprocess.run(command, cwd=REPO_ROOT)
+    result = subprocess.run(command, cwd=cwd or REPO_ROOT, env=env)
     if result.returncode != 0:
         raise SystemExit(result.returncode)
+
+
+def dbt_environment() -> dict[str, str]:
+    """Process environment for dbt, with `.env` merged in.
+
+    dbt's `env_var()` reads the **process** environment and knows nothing about
+    `.env` files. Without this, `dbt build` fails with "Env var required but
+    not provided: 'WAREHOUSE_PASSWORD'" — which reads like a dbt configuration
+    problem and is really just a missing bridge.
+
+    Loading it here rather than adding python-dotenv keeps one config path:
+    `ingestion/config.py` already parses `.env`, quoted values and all, and the
+    pipeline and the transformations now demonstrably read the same file.
+    """
+    sys.path.insert(0, str(REPO_ROOT))
+    from ingestion.config import read_env_file  # noqa: PLC0415
+
+    environment = dict(os.environ)
+    environment.update(read_env_file(REPO_ROOT / ".env"))
+
+    # dbt looks in ~/.dbt by default; ours is committed alongside the project.
+    environment["DBT_PROFILES_DIR"] = str(DBT_DIR)
+    return environment
 
 
 def require_venv() -> Path:
@@ -148,8 +174,45 @@ def task_ingest(args) -> None:
             why=f"pit stops and standings for {season} (one call per round)")
 
 
+def task_transform(args) -> None:
+    """Build and test the dbt models.
+
+    `dbt build` rather than `run` then `test`: build interleaves them, so a
+    model whose test fails stops its dependents instead of letting a bad table
+    propagate through the graph before anyone checks.
+    """
+    require_venv()
+    dbt = str(venv_exe("dbt"))
+    env = dbt_environment()
+
+    run([dbt, "deps"], why="install dbt packages", env=env, cwd=DBT_DIR)
+
+    if args.parse_only:
+        # No database needed — validates refs, sources and Jinja only. This is
+        # what CI runs, since CI has no warehouse credentials.
+        run([dbt, "parse"], why="validate the project without a database",
+            env=env, cwd=DBT_DIR)
+        return
+
+    command = [dbt, "build"]
+    if args.select:
+        command += ["--select", args.select]
+    run(command, why="build models and run their tests", env=env, cwd=DBT_DIR)
+
+
+def task_docs(_args) -> None:
+    """Generate the lineage graph and column docs (SECURITY §6: generated, not hand-written)."""
+    require_venv()
+    dbt = str(venv_exe("dbt"))
+    env = dbt_environment()
+    run([dbt, "docs", "generate"], why="generate dbt docs", env=env, cwd=DBT_DIR)
+    print("\nServe them with:  dbt docs serve --profiles-dir .   (from dbt/)")
+
+
 TASKS = {
     "setup": task_setup,
+    "transform": task_transform,
+    "docs": task_docs,
     "lint": task_lint,
     "test": task_test,
     "check": task_check,
@@ -173,6 +236,11 @@ def main() -> int:
         if name == "migrate":
             task_parser.add_argument("--status", action="store_true",
                                      help="show state without applying anything")
+        if name == "transform":
+            task_parser.add_argument("--select",
+                                     help="dbt selector, e.g. stg_drivers or staging")
+            task_parser.add_argument("--parse-only", action="store_true",
+                                     help="validate refs and syntax without a database")
 
     args = parser.parse_args()
     TASKS[args.task](args)

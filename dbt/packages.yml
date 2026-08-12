@@ -1,0 +1,16 @@
+# Installed into dbt/dbt_packages/, which is git-ignored — `dbt deps` restores
+# them from this file, so the versions are what is versioned rather than the
+# package contents.
+
+packages:
+  # Provides `generate_surrogate_key`, used for the hashed dimension keys
+  # SCHEMA §5 specifies. Writing that by hand is a MD5 over a concatenation
+  # with null handling and consistent separators; getting it subtly wrong
+  # produces keys that collide or that change between runs, and neither is
+  # obvious from looking at the output.
+  #
+  # Also supplies the composite `unique_combination_of_columns` test, which is
+  # how a multi-column grain gets enforced — the single highest-value test in
+  # the project, and one dbt does not ship natively.
+  - package: dbt-labs/dbt_utils
+    version: 1.3.0
