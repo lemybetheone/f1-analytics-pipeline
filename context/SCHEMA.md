@@ -70,6 +70,21 @@ documentation. All record paths are nested under an `MRData` envelope.
    every `driverId`, `constructorId`, `status` and `(season, round)` resolves,
    and all 1,172 races resolve to a circuit. Evidence:
    [`discovery/findings/join_coverage.md`](../discovery/findings/join_coverage.md).
+8b. **The reference-endpoint nullability above was sampled per season, not
+   all-time — and it is wrong for `drivers`.** The Phase 0 probe called
+   `2024/drivers` (25 current race drivers) and reported no nullable fields.
+   Across all **881** drivers, `dateOfBirth`, `nationality` and `url` are each
+   null for **16 rows (1.8%)**. Those 16 are *not* old records: they are modern
+   reserve and test drivers — Arthur Leclerc, Felipe Drugovich, Colton Herta,
+   Dino Beganovic — registered with the sport but with **no race results at
+   all**, carrying a name and nothing else.
+
+   Found 2026-08-10 when a `not_null` test on `stg_drivers.date_of_birth`
+   failed on its first build. The same sampling error as finding 9, in a
+   different disguise: a slice that looks representative because it is current.
+   **Treat every "no nullable fields observed" note above as scoped to the
+   sample that produced it** until a model tests it against the full table.
+
 9. **Field availability is era-dependent, and a modern sample lies about it.**
    Measured across every decade:
 

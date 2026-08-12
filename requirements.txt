@@ -12,6 +12,15 @@ requests==2.32.3
 psycopg[binary]==3.2.3
 boto3==1.35.99
 
+# --- transformation ---
+# The adapter lags core: dbt-postgres tops out at 1.11.0 while dbt-core is at
+# 1.12.1, and dbt itself refuses to run on a mismatched pair — `dbt --version`
+# exits non-zero with "at least one plugin is out of date". This combination is
+# the one dbt reports as up to date on both, so pin the pair together and
+# upgrade them together.
+dbt-postgres==1.11.0
+dbt-core==1.12.1
+
 # --- development / CI ---
 pytest==8.3.4
 ruff==0.9.2
@@ -31,3 +40,32 @@ six==1.17.0
 iniconfig==2.3.0
 packaging==26.3
 pluggy==1.6.0
+# dbt's own transitive tree
+agate==1.9.1
+click==8.4.2
+colorama==0.4.6
+daff==1.4.2
+dbt-adapters==1.24.5
+dbt-common==1.39.0
+dbt-core-experimental-parser==2.0.0b1
+dbt-extractor==0.6.0
+dbt-protos==1.0.541
+deepdiff==8.6.2
+isodate==0.7.2
+Jinja2==3.1.6
+leather==0.4.1
+MarkupSafe==3.0.3
+mashumaro==3.17
+msgpack==1.2.1
+networkx==3.6.1
+orderly-set==5.5.0
+parsedatetime==2.6
+pathspec==1.0.4
+protobuf==6.33.6
+pydantic==2.13.4
+pydantic_core==2.46.4
+pytimeparse==1.1.8
+PyYAML==6.0.3
+snowplow-tracker==1.1.0
+sqlparse==0.5.5
+typing_extensions==4.16.0

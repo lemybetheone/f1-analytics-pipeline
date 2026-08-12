@@ -1,0 +1,45 @@
+# Connection configuration. Committed deliberately, and safe to commit because
+# it contains **no credentials** — only `env_var()` references resolved at run
+# time from the process environment.
+#
+# dbt's default location is `~/.dbt/profiles.yml`, outside any repository, so
+# that people who write real passwords into it cannot commit them by accident.
+# That default is wrong for this project: it would make the connection setup
+# invisible to anyone reading the repo, mean a fresh clone cannot build without
+# hand-writing a file in a hidden home directory, and leave the configuration
+# unversioned. ARCHITECTURE §10 places it here instead.
+#
+# The cost is that dbt must be told to look here: DBT_PROFILES_DIR=dbt, which
+# `tasks.py transform` sets. Running `dbt` directly without it will look in
+# ~/.dbt and report a missing profile.
+#
+# NOTE: `env_var()` reads the **process** environment. dbt does not read `.env`.
+# `tasks.py` loads `.env` and passes it to the dbt subprocess; invoking dbt by
+# hand without that wiring fails with "Env var required but not provided".
+
+f1_analytics:
+  target: "{{ env_var('TARGET_ENV', 'dev') }}"
+
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('WAREHOUSE_HOST') }}"
+      port: "{{ env_var('WAREHOUSE_PORT') | int }}"
+      user: "{{ env_var('WAREHOUSE_USER') }}"
+      password: "{{ env_var('WAREHOUSE_PASSWORD') }}"
+      dbname: "{{ env_var('WAREHOUSE_DATABASE') }}"
+
+      # dbt builds into this schema by default; the macro in
+      # macros/generate_schema_name.sql routes each model to `staging` or
+      # `marts` instead of prefixing them onto this one.
+      schema: "{{ env_var('WAREHOUSE_SCHEMA_STAGING', 'staging') }}"
+
+      # Deliberately low. The connection goes through Supabase's session
+      # pooler, which holds one server connection per client session — more
+      # threads means more pooled connections for a build that takes seconds
+      # at this volume. Raise it only if a build is actually slow.
+      threads: 4
+
+      connect_timeout: 15
+      keepalives_idle: 0
+      retries: 2

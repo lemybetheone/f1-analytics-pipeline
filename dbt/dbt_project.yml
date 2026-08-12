@@ -1,0 +1,41 @@
+name: f1_analytics
+version: 1.0.0
+profile: f1_analytics
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  f1_analytics:
+    staging:
+      # Views, per SCHEMA §1. Staging only renames, casts and converts to UTC —
+      # joins and aggregation are forbidden in this layer — so there is nothing
+      # expensive enough to be worth materialising. A view also cannot go stale
+      # against `raw`, which matters because ingestion writes on its own
+      # schedule; a table would sit silently out of date between dbt runs.
+      #
+      # This is the cheapest decision in the project to reverse: change the one
+      # line below and rebuild. It would flip if staging ever did real work, or
+      # if volume grew enough that re-planning a chain of views cost something.
+      # At 26k rows it costs nothing.
+      +materialized: view
+      +schema: staging
+
+    marts:
+      # The opposite trade. Marts do the expensive work — joins across
+      # dimensions, aggregation — and BI reads them repeatedly, so computing
+      # once per build and storing the result is right.
+      +materialized: table
+      +schema: marts
+
+vars:
+  # Phase 0 measured field availability by decade: `FastestLap` is absent
+  # before 2000 and `Time` appears in 16-23% of pre-2000 rows. Models that
+  # need an era boundary reference this rather than hardcoding a year in
+  # several places.
+  fastest_lap_first_season: 2004
