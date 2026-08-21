@@ -241,3 +241,172 @@ models:
           Absent on 64% of rows even where FastestLap exists — nested blocks go
           missing at two depths. Every observed row reports kph.
 
+  - name: stg_circuits
+    description: >
+      One row per circuit, all of F1 history (78 rows).
+
+      **Grain: circuit_id.**
+    columns:
+      - name: circuit_id
+        description: "Natural key from the source."
+        data_tests: [unique, not_null]
+      
+      - name: circuit_name
+        description: >
+          Full circuit name, e.g. 'Silverstone Circuit'. Present for all 78.
+
+          Happens to be unique today, but deliberately **not** tested for
+          uniqueness: the key is `circuit_id`, and two circuits sharing a name
+          in future would be a fact about the sport rather than a defect.
+        data_tests:
+          - not_null
+
+      - name: country
+        description: >
+          Country as the source spells it — **free text, not a controlled
+          vocabulary**. 34 distinct values across 78 circuits.
+
+          Mixes full names with abbreviations: 'UK', 'USA', 'UAE' and 'Korea'
+          sit alongside 'South Africa' and 'Saudi Arabia'. So it is neither ISO
+          country names nor ISO codes, and joining it to any external country
+          reference would need an explicit mapping.
+
+          No `accepted_values` test: 34 values is too many to enumerate
+          usefully, and the list grows whenever F1 visits a new country — a
+          test that fails on a legitimate new race is worse than no test.
+        data_tests:
+          - not_null
+      
+      - name: locality
+        description: >
+          City or region, e.g. 'Silverstone', 'Monte-Carlo'. Not unique —
+          Barcelona has three circuits (Catalunya, Montjuïc, Pedralbes),
+          Madrid two, California two. Descriptive only; nothing joins on it.
+        data_tests:
+          - not_null
+
+      - name: latitude
+        description: >
+          Decimal degrees, cast to double precision — the type geospatial
+          tooling expects. Untested: not a join key, and a coordinate is an
+          approximation, so there is no invariant worth asserting.
+
+      - name: longitude
+        description: "Decimal degrees, double precision. Untested, as latitude."
+
+  - name: stg_constructors
+    description: >
+      One row per constructor, all of F1 history (214 rows).
+
+      **Type 1 downstream, with no SCD2** — Phase 0 walked every constructor
+      list from 1996 to 2024 and found no `constructor_id` ever carrying two
+      names. Rebrands are separate ids upstream: `toro_rosso` (2006–19),
+      `alphatauri` (2020–23) and `rb` (2024) are three rows here, not one row
+      with three versions. ARCHITECTURE decision 18.
+
+      **Grain: constructor_id.**
+    columns:
+      - name: constructor_id
+        description: "Natural key from the source. Stable for the life of a brand."
+        data_tests:
+          - unique
+          - not_null
+
+      - name: constructor_name
+        description: >
+          Team name as the source spells it, e.g. 'Red Bull', 'Alpine F1 Team'.
+          Renamed from the source's bare `name`, which would be ambiguous once
+          joined to anything else carrying a name.
+
+          Distinct across all 214 today, but deliberately **not** tested for
+          uniqueness — nothing joins on it, and two teams sharing a name would
+          be a fact about the sport rather than a defect.
+        data_tests:
+          - not_null
+
+      - name: nationality
+        description: >
+          Team's licensing nationality, 24 distinct values. Free text, not a
+          controlled vocabulary — no `accepted_values` test, since the list
+          grows whenever a team licenses under a new country.
+
+          Note it describes the *entry*, not the workforce: Alpine is French
+          and RB is Italian, both operating largely from the UK.
+        data_tests:
+          - not_null
+
+      - name: wikipedia_url
+        description: >
+          Reference link. Present for all 214, but **untested** — descriptive,
+          nothing joins or filters on it. SECURITY §4: a test that would not
+          change what you do if it failed is noise.
+
+  - name: stg_status
+    description: >
+      One row per finishing status, 136 values — 'Finished', '+1 Lap',
+      'Engine', 'Collision' and so on. Feeds dim_status, where SCHEMA §4 groups
+      them into mechanical / collision / finished for PRD §6 theme 6.
+
+      **Grain: status_id.**
+    columns:
+      - name: status_id
+        description: "Numeric key from the source, cast from text."
+        data_tests:
+          - unique
+          - not_null
+
+      - name: status
+        description: >
+          The status description, and **the actual join key to results** —
+          results carry this text and no `statusId`, so the fact joins on the
+          description rather than the id.
+
+          Tested for uniqueness because that is load-bearing here: a duplicate
+          text would fan out every fact row joined to it. Contrast
+          `circuit_name` and `constructor_name`, which are also unique today
+          but untested, because nothing joins on them.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: source_all_time_count
+        description: >
+          **Not an attribute of the status.** It is the number of times the
+          status occurred across *all of F1 history*, computed by the API for
+          the scope we queried — the 136 values sum to 26,115, which is the
+          all-time results total, while `raw.results` currently holds 1,200.
+
+          Kept deliberately, renamed to say what it is. After the historical
+          backfill it becomes a Tier-3 reconciliation check: counting
+          `fct_results` by status should reproduce these figures exactly, the
+          same pattern as reconciling derived standings against the official
+          ones (PRD §6). Do **not** use it as a metric — it will disagree with
+          anything computed from the loaded facts.
+        data_tests:
+          - not_null
+
+  - name: stg_seasons
+    description: >
+      One row per championship season, 1950–2026 (77 rows). The thinnest model
+      in the project — the source carries only the year and a reference link.
+
+      Included because SCHEMA §3 specifies one staging model per raw source,
+      and because it is the authoritative list of seasons: a season present in
+      `stg_races` but absent here would mean the reference load had drifted
+      from the race schedule.
+
+      **Grain: season.**
+    columns:
+      - name: season
+        description: >
+          Four-digit year, **cast to int to match `stg_races.season` and
+          `stg_results.season`**. Left as text it cannot be joined to them at
+          all — Postgres rejects `text = integer` rather than coercing.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: wikipedia_url
+        description: >
+          Reference link, present for all 77. Untested — descriptive, and
+          nothing joins or filters on it.
