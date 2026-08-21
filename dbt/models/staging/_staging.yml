@@ -62,3 +62,351 @@ models:
         description: "When the row was first loaded."
         data_tests:
           - not_null
+
+  - name: stg_races
+    description: >
+      One row per race, all of F1 history (1,172 rows, 1950–2026). Includes the
+      forward schedule, so races with no results yet are expected.
+
+      **Grain: (season, round).**
+    data_tests:
+      # A composite grain needs a composite test. dbt's built-in `unique` works
+      # on one column only, so a two-column grain would go unenforced without
+      # this — and an unenforced grain is how duplicate rows quietly double
+      # every downstream count.
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [season, round]
+    columns:
+      - name: season
+        description: "Four-digit year, cast to int so it sorts and joins numerically."
+        data_tests:
+          - not_null
+
+      - name: round
+        description: >
+          Round within the season, cast to int — as text, round 10 would sort
+          before round 2.
+        data_tests:
+          - not_null
+
+      - name: race_name
+        description: "e.g. 'Chinese Grand Prix'. Present for every race."
+        data_tests:
+          - not_null
+
+      - name: circuit_id
+        description: >
+          Foreign key to the circuit. Only the key is lifted from the nested
+          Circuit object; its attributes live in stg_circuits, so a correction
+          upstream has one place to land.
+        data_tests:
+          - not_null
+
+      - name: race_date
+        description: "Race day. Present for all 1,172 races."
+        data_tests:
+          - not_null
+
+      - name: race_start_utc
+        description: >
+          Scheduled start. **Legitimately null for ~62% of races** — the source
+          records `time` for only 37.6% of them, with older races having no
+          start time at all. Deliberately untested for null.
+
+      - name: practice_1_utc
+        description: "Null before the mid-2000s; sessions were not scheduled in the source."
+      - name: practice_2_utc
+        description: "Null before the mid-2000s. Also absent on sprint weekends, which run one practice."
+      - name: practice_3_utc
+        description: "Null before the mid-2000s. Also absent on sprint weekends."
+      - name: qualifying_utc
+        description: "Null before the mid-2000s."
+
+      - name: sprint_utc
+        description: "Non-null only on sprint weekends — 30 races in the whole dataset."
+
+      - name: sprint_qualifying_utc
+        description: >
+          Coalesced across the source's two names for this session:
+          `SprintQualifying` (18 races) and `SprintShootout` (6). Handled here
+          so no downstream model needs to know the sport renamed it.
+
+      - name: is_sprint_weekend
+        description: >
+          Derived from the presence of a Sprint block, so consumers do not test
+          for a nested key. True for 30 of 1,172 races.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+              quote: false
+
+  - name: stg_results
+    description: >
+      One row per driver per race — the core fact source. Currently 2024–2026
+      (1,200 rows); the historical backfill will take it to ~26,000.
+
+      **Grain: (season, round, driver_id).**
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [season, round, driver_id]
+    columns:
+      - name: season
+        data_tests: [not_null]
+      - name: round
+        data_tests: [not_null]
+      - name: driver_id
+        description: "Foreign key to stg_drivers."
+        data_tests:
+          - not_null
+          - relationships:
+              # Strict, because Phase 0 measured coverage at 100% across all
+              # 26,115 historical rows — so a failure here is a real defect
+              # rather than a known gap being rediscovered.
+              to: ref('stg_drivers')
+              field: driver_id
+
+      - name: constructor_id
+        description: >
+          Foreign key to the constructor. Present on the fact at race grain,
+          which is what makes teammate head-to-head (PRD §6 theme 4) a
+          self-join rather than a separate table.
+        data_tests:
+          - not_null
+
+      - name: classified_position
+        description: >
+          Classified order — **non-null even for retirements**. A driver who
+          crashed on lap 5 still has a position. Do not use this to identify
+          finishers; use `is_classified`.
+        data_tests: [not_null]
+
+      - name: position_text
+        description: >
+          The outcome marker: a number for a classified finish, or R (retired),
+          W (withdrew), D (disqualified). This, not `classified_position`, is
+          what separates a finish from a DNF.
+        data_tests:
+          - not_null
+          # Safe to enumerate: the marker set is fixed by the sport, unlike
+          # `status`, which has 136 values in the source.
+          - accepted_values:
+              values: ['R', 'W', 'D']
+              # Numeric values are the other legitimate case, so only the
+              # non-numeric ones are constrained.
+              where: "position_text !~ '^[0-9]+$'"
+
+      - name: points
+        description: >
+          Championship points. **numeric, not integer** — F1 awards half points
+          for a race stopped early (2021 Belgium, several 1950s races). None
+          appear in the loaded seasons, so an int cast would pass today and
+          fail on backfill.
+        data_tests: [not_null]
+
+      - name: grid_position
+        description: >
+          Starting position. **0 means a pit lane start**, a real value rather
+          than a missing one, so it is kept rather than nulled.
+        data_tests: [not_null]
+
+      - name: laps_completed
+        data_tests: [not_null]
+
+      - name: status
+        description: >
+          Retirement reason or finishing state. 5 distinct values in the loaded
+          seasons but **136 in the source's own status list**, so deliberately
+          **no accepted_values test** — one written today would break the
+          moment history loads. Grouping belongs in dim_status (SCHEMA §4).
+        data_tests: [not_null]
+
+      - name: is_classified
+        description: "True for a numeric position_text. The finisher test."
+        data_tests: [not_null]
+
+      - name: positions_gained
+        description: >
+          grid − finish for classified finishers (PRD §6 theme 3).
+          **Null for DNFs and for pit lane starts** — a car that started from
+          the pit lane has no grid slot to gain from, and including it would
+          flatter the number.
+
+      - name: race_time_millis
+        description: "Total race time. Classified finishers on the lead lap only; legitimately null otherwise."
+      - name: fastest_lap_number
+        description: "Legitimately null — FastestLap is absent entirely before 2000."
+      - name: fastest_lap_avg_speed_kph
+        description: >
+          Absent on 64% of rows even where FastestLap exists — nested blocks go
+          missing at two depths. Every observed row reports kph.
+
+  - name: stg_circuits
+    description: >
+      One row per circuit, all of F1 history (78 rows).
+
+      **Grain: circuit_id.**
+    columns:
+      - name: circuit_id
+        description: "Natural key from the source."
+        data_tests: [unique, not_null]
+      
+      - name: circuit_name
+        description: >
+          Full circuit name, e.g. 'Silverstone Circuit'. Present for all 78.
+
+          Happens to be unique today, but deliberately **not** tested for
+          uniqueness: the key is `circuit_id`, and two circuits sharing a name
+          in future would be a fact about the sport rather than a defect.
+        data_tests:
+          - not_null
+
+      - name: country
+        description: >
+          Country as the source spells it — **free text, not a controlled
+          vocabulary**. 34 distinct values across 78 circuits.
+
+          Mixes full names with abbreviations: 'UK', 'USA', 'UAE' and 'Korea'
+          sit alongside 'South Africa' and 'Saudi Arabia'. So it is neither ISO
+          country names nor ISO codes, and joining it to any external country
+          reference would need an explicit mapping.
+
+          No `accepted_values` test: 34 values is too many to enumerate
+          usefully, and the list grows whenever F1 visits a new country — a
+          test that fails on a legitimate new race is worse than no test.
+        data_tests:
+          - not_null
+      
+      - name: locality
+        description: >
+          City or region, e.g. 'Silverstone', 'Monte-Carlo'. Not unique —
+          Barcelona has three circuits (Catalunya, Montjuïc, Pedralbes),
+          Madrid two, California two. Descriptive only; nothing joins on it.
+        data_tests:
+          - not_null
+
+      - name: latitude
+        description: >
+          Decimal degrees, cast to double precision — the type geospatial
+          tooling expects. Untested: not a join key, and a coordinate is an
+          approximation, so there is no invariant worth asserting.
+
+      - name: longitude
+        description: "Decimal degrees, double precision. Untested, as latitude."
+
+  - name: stg_constructors
+    description: >
+      One row per constructor, all of F1 history (214 rows).
+
+      **Type 1 downstream, with no SCD2** — Phase 0 walked every constructor
+      list from 1996 to 2024 and found no `constructor_id` ever carrying two
+      names. Rebrands are separate ids upstream: `toro_rosso` (2006–19),
+      `alphatauri` (2020–23) and `rb` (2024) are three rows here, not one row
+      with three versions. ARCHITECTURE decision 18.
+
+      **Grain: constructor_id.**
+    columns:
+      - name: constructor_id
+        description: "Natural key from the source. Stable for the life of a brand."
+        data_tests:
+          - unique
+          - not_null
+
+      - name: constructor_name
+        description: >
+          Team name as the source spells it, e.g. 'Red Bull', 'Alpine F1 Team'.
+          Renamed from the source's bare `name`, which would be ambiguous once
+          joined to anything else carrying a name.
+
+          Distinct across all 214 today, but deliberately **not** tested for
+          uniqueness — nothing joins on it, and two teams sharing a name would
+          be a fact about the sport rather than a defect.
+        data_tests:
+          - not_null
+
+      - name: nationality
+        description: >
+          Team's licensing nationality, 24 distinct values. Free text, not a
+          controlled vocabulary — no `accepted_values` test, since the list
+          grows whenever a team licenses under a new country.
+
+          Note it describes the *entry*, not the workforce: Alpine is French
+          and RB is Italian, both operating largely from the UK.
+        data_tests:
+          - not_null
+
+      - name: wikipedia_url
+        description: >
+          Reference link. Present for all 214, but **untested** — descriptive,
+          nothing joins or filters on it. SECURITY §4: a test that would not
+          change what you do if it failed is noise.
+
+  - name: stg_status
+    description: >
+      One row per finishing status, 136 values — 'Finished', '+1 Lap',
+      'Engine', 'Collision' and so on. Feeds dim_status, where SCHEMA §4 groups
+      them into mechanical / collision / finished for PRD §6 theme 6.
+
+      **Grain: status_id.**
+    columns:
+      - name: status_id
+        description: "Numeric key from the source, cast from text."
+        data_tests:
+          - unique
+          - not_null
+
+      - name: status
+        description: >
+          The status description, and **the actual join key to results** —
+          results carry this text and no `statusId`, so the fact joins on the
+          description rather than the id.
+
+          Tested for uniqueness because that is load-bearing here: a duplicate
+          text would fan out every fact row joined to it. Contrast
+          `circuit_name` and `constructor_name`, which are also unique today
+          but untested, because nothing joins on them.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: source_all_time_count
+        description: >
+          **Not an attribute of the status.** It is the number of times the
+          status occurred across *all of F1 history*, computed by the API for
+          the scope we queried — the 136 values sum to 26,115, which is the
+          all-time results total, while `raw.results` currently holds 1,200.
+
+          Kept deliberately, renamed to say what it is. After the historical
+          backfill it becomes a Tier-3 reconciliation check: counting
+          `fct_results` by status should reproduce these figures exactly, the
+          same pattern as reconciling derived standings against the official
+          ones (PRD §6). Do **not** use it as a metric — it will disagree with
+          anything computed from the loaded facts.
+        data_tests:
+          - not_null
+
+  - name: stg_seasons
+    description: >
+      One row per championship season, 1950–2026 (77 rows). The thinnest model
+      in the project — the source carries only the year and a reference link.
+
+      Included because SCHEMA §3 specifies one staging model per raw source,
+      and because it is the authoritative list of seasons: a season present in
+      `stg_races` but absent here would mean the reference load had drifted
+      from the race schedule.
+
+      **Grain: season.**
+    columns:
+      - name: season
+        description: >
+          Four-digit year, **cast to int to match `stg_races.season` and
+          `stg_results.season`**. Left as text it cannot be joined to them at
+          all — Postgres rejects `text = integer` rather than coercing.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: wikipedia_url
+        description: >
+          Reference link, present for all 77. Untested — descriptive, and
+          nothing joins or filters on it.
