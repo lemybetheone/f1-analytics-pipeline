@@ -62,3 +62,182 @@ models:
         description: "When the row was first loaded."
         data_tests:
           - not_null
+
+  - name: stg_races
+    description: >
+      One row per race, all of F1 history (1,172 rows, 1950–2026). Includes the
+      forward schedule, so races with no results yet are expected.
+
+      **Grain: (season, round).**
+    data_tests:
+      # A composite grain needs a composite test. dbt's built-in `unique` works
+      # on one column only, so a two-column grain would go unenforced without
+      # this — and an unenforced grain is how duplicate rows quietly double
+      # every downstream count.
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [season, round]
+    columns:
+      - name: season
+        description: "Four-digit year, cast to int so it sorts and joins numerically."
+        data_tests:
+          - not_null
+
+      - name: round
+        description: >
+          Round within the season, cast to int — as text, round 10 would sort
+          before round 2.
+        data_tests:
+          - not_null
+
+      - name: race_name
+        description: "e.g. 'Chinese Grand Prix'. Present for every race."
+        data_tests:
+          - not_null
+
+      - name: circuit_id
+        description: >
+          Foreign key to the circuit. Only the key is lifted from the nested
+          Circuit object; its attributes live in stg_circuits, so a correction
+          upstream has one place to land.
+        data_tests:
+          - not_null
+
+      - name: race_date
+        description: "Race day. Present for all 1,172 races."
+        data_tests:
+          - not_null
+
+      - name: race_start_utc
+        description: >
+          Scheduled start. **Legitimately null for ~62% of races** — the source
+          records `time` for only 37.6% of them, with older races having no
+          start time at all. Deliberately untested for null.
+
+      - name: practice_1_utc
+        description: "Null before the mid-2000s; sessions were not scheduled in the source."
+      - name: practice_2_utc
+        description: "Null before the mid-2000s. Also absent on sprint weekends, which run one practice."
+      - name: practice_3_utc
+        description: "Null before the mid-2000s. Also absent on sprint weekends."
+      - name: qualifying_utc
+        description: "Null before the mid-2000s."
+
+      - name: sprint_utc
+        description: "Non-null only on sprint weekends — 30 races in the whole dataset."
+
+      - name: sprint_qualifying_utc
+        description: >
+          Coalesced across the source's two names for this session:
+          `SprintQualifying` (18 races) and `SprintShootout` (6). Handled here
+          so no downstream model needs to know the sport renamed it.
+
+      - name: is_sprint_weekend
+        description: >
+          Derived from the presence of a Sprint block, so consumers do not test
+          for a nested key. True for 30 of 1,172 races.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+              quote: false
+
+  - name: stg_results
+    description: >
+      One row per driver per race — the core fact source. Currently 2024–2026
+      (1,200 rows); the historical backfill will take it to ~26,000.
+
+      **Grain: (season, round, driver_id).**
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [season, round, driver_id]
+    columns:
+      - name: season
+        data_tests: [not_null]
+      - name: round
+        data_tests: [not_null]
+      - name: driver_id
+        description: "Foreign key to stg_drivers."
+        data_tests:
+          - not_null
+          - relationships:
+              # Strict, because Phase 0 measured coverage at 100% across all
+              # 26,115 historical rows — so a failure here is a real defect
+              # rather than a known gap being rediscovered.
+              to: ref('stg_drivers')
+              field: driver_id
+
+      - name: constructor_id
+        description: >
+          Foreign key to the constructor. Present on the fact at race grain,
+          which is what makes teammate head-to-head (PRD §6 theme 4) a
+          self-join rather than a separate table.
+        data_tests:
+          - not_null
+
+      - name: classified_position
+        description: >
+          Classified order — **non-null even for retirements**. A driver who
+          crashed on lap 5 still has a position. Do not use this to identify
+          finishers; use `is_classified`.
+        data_tests: [not_null]
+
+      - name: position_text
+        description: >
+          The outcome marker: a number for a classified finish, or R (retired),
+          W (withdrew), D (disqualified). This, not `classified_position`, is
+          what separates a finish from a DNF.
+        data_tests:
+          - not_null
+          # Safe to enumerate: the marker set is fixed by the sport, unlike
+          # `status`, which has 136 values in the source.
+          - accepted_values:
+              values: ['R', 'W', 'D']
+              # Numeric values are the other legitimate case, so only the
+              # non-numeric ones are constrained.
+              where: "position_text !~ '^[0-9]+$'"
+
+      - name: points
+        description: >
+          Championship points. **numeric, not integer** — F1 awards half points
+          for a race stopped early (2021 Belgium, several 1950s races). None
+          appear in the loaded seasons, so an int cast would pass today and
+          fail on backfill.
+        data_tests: [not_null]
+
+      - name: grid_position
+        description: >
+          Starting position. **0 means a pit lane start**, a real value rather
+          than a missing one, so it is kept rather than nulled.
+        data_tests: [not_null]
+
+      - name: laps_completed
+        data_tests: [not_null]
+
+      - name: status
+        description: >
+          Retirement reason or finishing state. 5 distinct values in the loaded
+          seasons but **136 in the source's own status list**, so deliberately
+          **no accepted_values test** — one written today would break the
+          moment history loads. Grouping belongs in dim_status (SCHEMA §4).
+        data_tests: [not_null]
+
+      - name: is_classified
+        description: "True for a numeric position_text. The finisher test."
+        data_tests: [not_null]
+
+      - name: positions_gained
+        description: >
+          grid − finish for classified finishers (PRD §6 theme 3).
+          **Null for DNFs and for pit lane starts** — a car that started from
+          the pit lane has no grid slot to gain from, and including it would
+          flatter the number.
+
+      - name: race_time_millis
+        description: "Total race time. Classified finishers on the lead lap only; legitimately null otherwise."
+      - name: fastest_lap_number
+        description: "Legitimately null — FastestLap is absent entirely before 2000."
+      - name: fastest_lap_avg_speed_kph
+        description: >
+          Absent on 64% of rows even where FastestLap exists — nested blocks go
+          missing at two depths. Every observed row reports kph.
+
