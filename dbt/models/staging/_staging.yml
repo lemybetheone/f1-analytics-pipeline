@@ -75,7 +75,8 @@ models:
       # this — and an unenforced grain is how duplicate rows quietly double
       # every downstream count.
       - dbt_utils.unique_combination_of_columns:
-          combination_of_columns: [season, round]
+          arguments:
+            combination_of_columns: [season, round]
     columns:
       - name: season
         description: "Four-digit year, cast to int so it sorts and joins numerically."
@@ -138,8 +139,9 @@ models:
         data_tests:
           - not_null
           - accepted_values:
-              values: [true, false]
-              quote: false
+              arguments:
+                values: [true, false]
+                quote: false
 
   - name: stg_results
     description: >
@@ -149,7 +151,8 @@ models:
       **Grain: (season, round, driver_id).**
     data_tests:
       - dbt_utils.unique_combination_of_columns:
-          combination_of_columns: [season, round, driver_id]
+          arguments:
+            combination_of_columns: [season, round, driver_id]
     columns:
       - name: season
         data_tests: [not_null]
@@ -160,11 +163,12 @@ models:
         data_tests:
           - not_null
           - relationships:
-              # Strict, because Phase 0 measured coverage at 100% across all
-              # 26,115 historical rows — so a failure here is a real defect
-              # rather than a known gap being rediscovered.
-              to: ref('stg_drivers')
-              field: driver_id
+              arguments:
+                # Strict, because Phase 0 measured coverage at 100% across all
+                # 26,115 historical rows — so a failure here is a real defect
+                # rather than a known gap being rediscovered.
+                to: ref('stg_drivers')
+                field: driver_id
 
       - name: constructor_id
         description: >
@@ -191,10 +195,12 @@ models:
           # Safe to enumerate: the marker set is fixed by the sport, unlike
           # `status`, which has 136 values in the source.
           - accepted_values:
-              values: ['R', 'W', 'D']
-              # Numeric values are the other legitimate case, so only the
-              # non-numeric ones are constrained.
-              where: "position_text !~ '^[0-9]+$'"
+              arguments:
+                values: ['R', 'W', 'D']
+              config:
+                # Numeric values are the other legitimate case, so only the
+                # non-numeric ones are constrained.
+                where: "position_text !~ '^[0-9]+$'"
 
       - name: points
         description: >
@@ -410,3 +416,348 @@ models:
         description: >
           Reference link, present for all 77. Untested — descriptive, and
           nothing joins or filters on it.
+
+  - name: stg_sprint
+    description: >
+      One row per driver per sprint race (328 rows). Sprints only run on some
+      weekends — 30 of 1,172 races in the whole dataset — so this is
+      deliberately small and will stay small.
+
+      Structurally near-identical to `stg_results`, and column names are kept
+      identical on purpose so the two can be unioned without renaming.
+
+      **Grain: (season, round, driver_id).**
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, round, driver_id]
+    columns:
+      - name: season
+        data_tests: [not_null]
+      - name: round
+        data_tests: [not_null]
+
+      - name: driver_id
+        description: "Foreign key to stg_drivers."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_drivers')
+                field: driver_id
+
+      - name: constructor_id
+        description: "Foreign key to the constructor, at sprint-race grain."
+        data_tests: [not_null]
+
+      - name: classified_position
+        description: >
+          Classified order — non-null for retirements too. Use `is_classified`
+          to identify finishers, not this.
+        data_tests: [not_null]
+
+      - name: position_text
+        description: >
+          Outcome marker: a number for a classified finish, or R (retired, 18),
+          W (withdrew, 2), D (disqualified, 1).
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['R', 'W', 'D']
+              config:
+                where: "position_text !~ '^[0-9]+$'"
+
+      - name: points
+        description: >
+          Sprint points — 8 down to 1 for the top eight. `numeric` rather than
+          `int` for the same reason as results: a shortened sprint could award
+          half points, and the cast costs nothing.
+        data_tests: [not_null]
+
+      - name: grid_position
+        description: "Starting position for the sprint, set by sprint qualifying."
+        data_tests: [not_null]
+
+      - name: laps_completed
+        description: "Sprints are short — around 19 laps rather than a race's ~57."
+        data_tests: [not_null]
+
+      - name: status
+        description: >
+          5 distinct values in the loaded sprints. No `accepted_values` test,
+          for the same reason as results — the source defines 136.
+        data_tests: [not_null]
+
+      - name: is_classified
+        description: "True for a numeric position_text. The finisher test."
+        data_tests: [not_null]
+
+      - name: positions_gained
+        description: >
+          grid − finish for classified finishers. Null for DNFs. No pit lane
+          starts appear in the loaded sprints, but the guard is kept for
+          consistency with `stg_results`.
+
+      - name: race_time_millis
+        description: >
+          Total sprint time, classified finishers on the lead lap only —
+          307 of 328. Named `race_time_*` rather than `sprint_time_*` so the
+          column lines up with `stg_results` for a future union.
+
+      - name: fastest_lap_number
+        description: "Null on 9 of 328 rows — a driver who set no timed lap."
+      - name: fastest_lap_rank
+        description: "Null on the same 9 rows."
+      - name: fastest_lap_time_display
+        description: >
+          Lap time as text, e.g. '1:40.331'. Kept as text at staging — it is
+          not a number, and converting to milliseconds is a mart decision.
+  - name: stg_qualifying
+    description: >
+      One row per driver per qualifying session (1,197 rows for 2024–2026).
+
+      Unlike the race and sprint models this has no points, status,
+      positionText or Time block — qualifying has its own shape, so the
+      structure is not shared with them.
+
+      **Grain: (season, round, driver_id).**
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, round, driver_id]
+    columns:
+      - name: season
+        data_tests: [not_null]
+      - name: round
+        data_tests: [not_null]
+
+      - name: driver_id
+        description: "Foreign key to stg_drivers."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_drivers')
+                field: driver_id
+
+      - name: constructor_id
+        data_tests: [not_null]
+
+      - name: qualifying_position
+        description: >
+          Position set in qualifying. **Not the same as
+          `stg_results.grid_position`** — penalties move drivers between the
+          two, and comparing them is how a grid penalty becomes visible.
+        data_tests: [not_null]
+
+      - name: q1_time
+        description: >
+          Q1 lap as text, e.g. '1:30.031'. **Legitimately null on 33 rows** —
+          drivers who took part but set no time. Not cast: the format is
+          minutes:seconds.thousandths and converts to no numeric type.
+
+      - name: q2_time
+        description: >
+          Null in two distinct situations: eliminated in Q1 (298 rows, key
+          absent) or reached Q2 and set no time (30 rows, empty string
+          normalised to NULL). Use `reached_q2` to tell them apart.
+
+      - name: q3_time
+        description: >
+          Null for the 606 rows eliminated before Q3, and the 24 that reached
+          it without setting a time.
+
+      - name: reached_q2
+        description: >
+          Read from **key presence**, not from whether a time exists — a driver
+          who reached Q2 and crashed without a lap still reached it.
+        data_tests: [not_null]
+
+      - name: reached_q3
+        description: "Key presence, as reached_q2. True for the top ten."
+        data_tests: [not_null]
+
+      - name: decisive_time
+        description: >
+          The lap that set the grid slot — the last session in which the driver
+          recorded a time, coalesced Q3 → Q2 → Q1. Null only for those who set
+          no time at all, so it is untested.
+
+      - name: eliminated_in
+        description: "Which session the driver's qualifying ended in."
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Q1', 'Q2', 'Q3']
+
+      - name: set_no_time
+        description: "Took part but recorded no lap. True on 33 rows."
+        data_tests: [not_null]
+
+  - name: stg_pitstops
+    description: >
+      One row per pit stop (2,081 rows for 2024–2026).
+
+      **Grain: (season, round, driver_id, stop_number).** `stop_number` is
+      load-bearing — 2,081 rows span only 1,134 driver-races, so without it 45%
+      of rows would collide.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, round, driver_id, stop_number]
+    columns:
+      - name: season
+        data_tests: [not_null]
+      - name: round
+        data_tests: [not_null]
+      - name: driver_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_drivers')
+                field: driver_id
+      - name: stop_number
+        description: "Which stop of the race, 1-based. Part of the grain."
+        data_tests: [not_null]
+      - name: lap
+        description: "Lap the stop was taken on."
+        data_tests: [not_null]
+      - name: duration_display
+        description: >
+          Duration exactly as the source gives it. Usually plain seconds
+          ('25.208'), but 83 rows carry a minutes component ('1:01.930', and up
+          to '39:54.053' under a red flag). Kept verbatim so nothing is lost to
+          the conversion.
+
+          **Legitimately null on 2 rows** — stops recorded with no timing at
+          all, empty strings in the source normalised to NULL here.
+          Deliberately untested.
+
+      - name: duration_seconds
+        description: >
+          `duration_display` normalised to seconds, handling both formats — a
+          plain `::numeric` cast fails outright on the mm:ss values, and
+          raises rather than returning null on the two empty ones.
+
+          Null on the same 2 rows, so untested. A `not_null` test here failed
+          on the first build with a database error, which is what surfaced the
+          empty durations in the first place.
+      - name: stop_time_local
+        description: >
+          **Local wall-clock time of day** the stop happened ('18:05:33') — not
+          a duration and not a timestamp. No date, no zone, so it cannot be
+          made UTC as CONVENTIONS require without the circuit's offset, which
+          the source does not provide. Left as text rather than cast into
+          something that looks like a timestamp but is not.
+        data_tests: [not_null]
+
+  - name: stg_driver_standings
+    description: >
+      Championship table after each round (1,259 rows for 2024–2026). A
+      periodic snapshot whose snapshot key is `round`, already part of the
+      natural key — which is why no `snapshot_date` column is needed.
+
+      **Grain: (season, round, driver_id).**
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, round, driver_id]
+    columns:
+      - name: season
+        data_tests: [not_null]
+      - name: round
+        data_tests: [not_null]
+      - name: driver_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_drivers')
+                field: driver_id
+
+      - name: championship_position
+        description: >
+          **Legitimately null on 8 rows** — deliberately untested. Drivers on
+          zero points and zero wins early in a season, before anyone has
+          separated them (2025 round 1 has six). The source declines to rank an
+          entirely tied field rather than inventing an order.
+
+      - name: position_text
+        description: >
+          Always present, and carries '-' on exactly the 8 rows where
+          `championship_position` is null.
+        data_tests: [not_null]
+
+      - name: points
+        description: "numeric, not int — F1 awards half points for a shortened race."
+        data_tests: [not_null]
+
+      - name: wins
+        data_tests: [not_null]
+
+      - name: constructor_count
+        description: >
+          How many constructors the driver has raced for this season. 2 on 62
+          rows — Oliver Bearman drove for Ferrari and Haas across 2024.
+        data_tests: [not_null]
+
+      - name: constructor_ids
+        description: >
+          The constructor list preserved as an array rather than flattened.
+          Collapsing it to one id would silently pick a winner and imply a
+          driver has exactly one team per season, which is false. The
+          single-valued driver-to-constructor relationship lives on
+          `stg_results` at race grain instead — the reason PRD §6 puts
+          `constructor_key` on the results fact.
+
+      - name: is_unranked
+        description: "True where the source declined to rank the driver. 8 rows."
+        data_tests: [not_null]
+
+      - name: changed_constructor_in_season
+        description: "True where constructor_count > 1. 62 rows."
+        data_tests: [not_null]
+
+  - name: stg_constructor_standings
+    description: >
+      Constructors' championship after each round (601 rows for 2024–2026).
+      Counterpart to `stg_driver_standings`, split by entity rather than
+      combined into one polymorphic fact — a key that is sometimes a driver and
+      sometimes a constructor needs a nullable foreign key and breaks clean
+      `relationships` tests on both sides (PRD §6).
+
+      The cleanest payload in the project: five keys, all present on every row,
+      no missing positions, no '-' marker, and `Constructor` is a single object
+      rather than a list. Verified rather than assumed — two tables looking
+      alike is exactly when a shared assumption goes wrong.
+
+      **Grain: (season, round, constructor_id).**
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, round, constructor_id]
+    columns:
+      - name: season
+        data_tests: [not_null]
+      - name: round
+        data_tests: [not_null]
+      - name: constructor_id
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('stg_constructors')
+                field: constructor_id
+      - name: championship_position
+        description: "Present on every row here, unlike driver standings."
+        data_tests: [not_null]
+      - name: position_text
+        description: "Numeric throughout — no '-' marker in this table."
+        data_tests: [not_null]
+      - name: points
+        data_tests: [not_null]
+      - name: wins
+        data_tests: [not_null]
