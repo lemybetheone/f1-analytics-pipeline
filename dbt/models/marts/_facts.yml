@@ -1,0 +1,142 @@
+version: 2
+
+models:
+  - name: fct_results
+    description: >
+      One row per driver per race — **the core fact**. PRD §6 themes 2, 3, 4
+      and 6 all resolve here. Currently 2024–2026 (1,244 rows); the historical
+      backfill takes it to ~26,000.
+
+      Transaction-grained, because that is the event the sport produces.
+
+      **Both `driver_key` and `constructor_key` sit here**, which is what makes
+      teammate head-to-head (theme 4) a self-join on `(race_key,
+      constructor_key)` with differing `driver_key` — rather than a bridge
+      table. A driver's team changes within a season so it cannot live on
+      `dim_driver`, but at race grain it is single-valued.
+
+      **Grain: (race_key, driver_key).**
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [race_key, driver_key]
+    columns:
+      - name: race_key
+        description: "Foreign key to dim_race."
+        data_tests:
+          - not_null
+          # Structural only. Because unmatched keys are coalesced to the
+          # Unknown member, which exists in every dimension, this can no longer
+          # fail on drift — `assert_no_facts_on_unknown_members` covers that.
+          # It still catches a coalesce being removed or a key built from the
+          # wrong column.
+          - relationships:
+              arguments:
+                to: ref('dim_race')
+                field: race_key
+
+      - name: driver_key
+        description: "Foreign key to dim_driver."
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_driver')
+                field: driver_key
+
+      - name: constructor_key
+        description: >
+          Foreign key to dim_constructor, at **race** grain — single-valued
+          here even though a driver's season may span two teams.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_constructor')
+                field: constructor_key
+
+      - name: status_key
+        description: >
+          Foreign key to dim_status. Joined on the status **text**, since
+          results carry no statusId.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_status')
+                field: status_key
+
+      - name: season
+        description: >
+          Denormalised onto the fact deliberately. The line drawn is to
+          denormalise what is filtered on constantly, not what is joined for —
+          almost every query slices by season, and forcing a `dim_race` join
+          for that is friction with no benefit.
+        data_tests:
+          - not_null
+
+      - name: round
+        description: "Denormalised alongside season, for the same reason."
+        data_tests:
+          - not_null
+
+      - name: position_text
+        description: >
+          Degenerate dimension: the stewards' outcome marker. A number for a
+          classified finish, or R, W, D.
+        data_tests:
+          - not_null
+
+      - name: classified_position
+        description: >
+          Classified order — **non-null even for retirements**. A driver who
+          crashed on lap 5 still has one. Use `is_classified` to identify
+          finishers, never this.
+        data_tests:
+          - not_null
+
+      - name: grid_position
+        description: "Starting position. 0 means a pit lane start, a real value."
+        data_tests:
+          - not_null
+
+      - name: points
+        description: >
+          Championship points. `numeric`, not integer — F1 awards half points
+          for a shortened race. Additive across any dimension.
+        data_tests:
+          - not_null
+
+      - name: laps_completed
+        description: "Additive."
+        data_tests:
+          - not_null
+
+      - name: is_classified
+        description: >
+          **The authoritative answer to "did this driver finish"**, read from
+          `position_text`, the stewards' marker.
+
+          Do not substitute `dim_status.status_implies_running_at_end` — the
+          two disagree on 20 of 1,244 rows and answer different questions.
+          Status describes how the car ran; this records what was decided.
+        data_tests:
+          - not_null
+
+      - name: positions_gained
+        description: >
+          grid − finish for classified finishers (theme 3). **Null for DNFs and
+          for pit lane starts** — a car starting from the pit lane has no grid
+          slot to gain from, and including it would flatter the number.
+
+      - name: race_time_millis
+        description: "Classified finishers on the lead lap only; legitimately null otherwise."
+
+      - name: fastest_lap_rank
+        description: "Legitimately null — FastestLap is absent entirely before 2000."
+
+      - name: fastest_lap_avg_speed_kph
+        description: "Absent on most rows even where FastestLap exists. Always kph."
+
+      - name: source_key
+        description: "Lake object this row traces back to."
