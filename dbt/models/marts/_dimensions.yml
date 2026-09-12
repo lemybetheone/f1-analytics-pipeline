@@ -302,3 +302,100 @@ models:
           fact landing here means the source has drifted.
         data_tests:
           - not_null
+
+  - name: dim_status
+    description: >
+      One row per finishing status (136), plus one **Unknown member** —
+      137 rows total.
+
+      SCHEMA §4 marks this dimension optional, and that is fair: PRD §6 theme 6
+      is answerable without it. What it adds is a **coarser rollup** the raw
+      136-value list cannot give, and a surrogate key so the fact stops carrying
+      free text for a categorical.
+
+      **The surrogate hashes `status`, not `status_id`** — results carry the
+      description and no statusId, so the text is the real join key.
+
+      **Grain: status_key.**
+    columns:
+      - name: status_key
+        description: >
+          Surrogate key, hashed from the status **text**. Facts join on this.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: status_id
+        description: >
+          The source's numeric id. Retained for traceability, but **not** the
+          join key — results do not carry it.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: status
+        description: >
+          The description, e.g. 'Finished', '+1 Lap', 'Engine'. Unique across
+          all 136, and tested for it because that uniqueness is load-bearing:
+          a duplicate would fan out every fact row joined to it.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: status_category
+        description: >
+          **Curated grouping — this is the one place an opinion is encoded as
+          data in this warehouse**, so it is worth reading the model header
+          before trusting it.
+
+          Every non-mechanical outcome is enumerated and everything else falls
+          through to `mechanical`. Verified against all 136: the 82 that fall
+          through are Engine, Gearbox, Suspension, Transmission, Electrical,
+          Brakes and similar — mechanical without exception.
+
+          The risk that creates is that a *new* non-mechanical status added
+          upstream would be filed silently as mechanical. The exception lists
+          in the model are where such an outcome gets added. Defaulting to
+          'unclassified' instead was considered and rejected: it would put
+          6,654 all-time rows into a bucket that answers nothing.
+        data_tests:
+          - not_null
+          # Safe to enumerate, unlike `status` itself: this vocabulary is ours,
+          # not the source's, so it only changes when we change it.
+          - accepted_values:
+              arguments:
+                values:
+                  - finished
+                  - lapped
+                  - mechanical
+                  - collision
+                  - disqualified
+                  - non_start_or_other
+                  - unknown
+
+      - name: status_implies_running_at_end
+        description: >
+          Whether the status describes a car still running at the end.
+
+          **This is not the same question as whether the driver was
+          classified**, and conflating them was a real bug: the two disagreed
+          on 20 of 1,244 rows. Russell in 2024 round 3 has status 'Retired'
+          after 56 laps yet positionText '17' — classified, because he covered
+          enough race distance. The reverse occurs too: status 'Lapped' with
+          positionText 'R'.
+
+          Status describes how the car ran; `positionText` records what the
+          stewards decided. **For DNF rate use `stg_results.is_classified`**,
+          which reads the official marker. Null on the Unknown member.
+
+      - name: source_all_time_count
+        description: >
+          The API's all-time occurrence count for the scope queried — **not a
+          metric**. It will disagree with anything counted from the facts until
+          the historical backfill completes, and is kept as the input to that
+          reconciliation. Null on the Unknown member.
+
+      - name: is_unknown
+        description: "Flags the synthetic row."
+        data_tests:
+          - not_null
