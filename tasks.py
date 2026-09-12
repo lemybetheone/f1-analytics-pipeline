@@ -17,6 +17,8 @@ Usage
     python tasks.py migrate      # apply pending migrations
     python tasks.py verify       # prove warehouse + lake connectivity
     python tasks.py ingest       # full ingest for one season (default 2024)
+    python tasks.py backfill     # the historical seasons, newest first
+    python tasks.py transform    # build and test the dbt models
 """
 
 from __future__ import annotations
@@ -26,15 +28,25 @@ import os
 import platform
 import subprocess
 import sys
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
 DBT_DIR = REPO_ROOT / "dbt"
 VENV = REPO_ROOT / ".venv"
+LOG_DIR = REPO_ROOT / "logs"
 IS_WINDOWS = platform.system() == "Windows"
 BIN = VENV / ("Scripts" if IS_WINDOWS else "bin")
 
 DEFAULT_SEASON = "2024"
+
+# The first season the source covers. Current seasons are `ingest`'s job.
+FIRST_SEASON = 1950
+LAST_HISTORICAL_SEASON = 2023
+
+# Three in a row is the network, the credentials or the source — not the data.
+MAX_CONSECUTIVE_BACKFILL_FAILURES = 3
 
 
 def venv_exe(name: str) -> Path:
@@ -174,6 +186,90 @@ def task_ingest(args) -> None:
             why=f"pit stops and standings for {season} (one call per round)")
 
 
+def task_backfill(args) -> None:
+    """Load the historical seasons, newest first, resumably.
+
+    Separate from `ingest` rather than a flag on it, because the two have
+    different failure models. `ingest` is a handful of calls for one season and
+    can afford to die on the first error. A backfill is ~3,800 calls over ~7.6
+    hours against a 500/hour budget, so it has to survive interruption, skip
+    what it already did, and keep going when one season misbehaves.
+
+    Three things `ingest` does not do, each of which cost something to learn:
+
+    1. **`--resume` on every call.** Without it a restart re-fetches every
+       completed scope, spending the budget twice for rows already held.
+
+    2. **A pinned lake partition.** `--ingestion-date` otherwise defaults to
+       *today, computed per process*, and this spawns two processes per season
+       — so a run crossing midnight UTC scatters seasons across two partitions.
+       The sharper edge is on resume: `--resume` skips an extract whose
+       checkpoint says complete, then the loader looks for objects under the
+       *new* partition prefix, finds none, and loads nothing. A silent no-op
+       that reads exactly like success. **Resuming an interrupted backfill
+       means passing the original `--partition`**, which is why it is echoed at
+       the start and named in the log filename.
+
+    3. **Failure is per-season, not fatal.** One awkward season should not end
+       a seven-hour run. Three consecutive failures should, because that is the
+       network, the credentials or the source rather than the data.
+    """
+    python = require_venv()
+    seasons = [str(year) for year in range(args.to_season, args.from_season - 1, -1)]
+
+    LOG_DIR.mkdir(exist_ok=True)
+    log_path = LOG_DIR / f"backfill_{args.partition}.log"
+
+    print(f"seasons:   {seasons[0]} down to {seasons[-1]} ({len(seasons)})")
+    print(f"partition: {args.partition}")
+    print(f"log:       {log_path}")
+    print(f"\nResume an interrupted run with:\n"
+          f"  python tasks.py backfill --from {args.from_season} "
+          f"--to {args.to_season} --partition {args.partition}\n")
+
+    started = time.monotonic()
+    failed_seasons: list[str] = []
+    consecutive = 0
+
+    with log_path.open("a", encoding="utf-8") as log:
+        for index, season in enumerate(seasons, start=1):
+            ok = True
+            for phase, flag in (("session facts", "--all-season"),
+                                ("pit stops and standings", "--all-race")):
+                label = f"[{index:>2}/{len(seasons)}] {season}  {phase}"
+                print(f"{label} ... ", end="", flush=True)
+                log.write(f"\n{'=' * 70}\n{label}\n{'=' * 70}\n")
+                log.flush()
+
+                result = subprocess.run(
+                    [str(python), "-m", "ingestion.pipeline", flag,
+                     "--season", season, "--resume",
+                     "--ingestion-date", args.partition],
+                    cwd=REPO_ROOT, stdout=log, stderr=subprocess.STDOUT,
+                )
+                ok &= result.returncode == 0
+                print("ok" if result.returncode == 0 else "FAILED")
+
+            if ok:
+                consecutive = 0
+                continue
+
+            failed_seasons.append(season)
+            consecutive += 1
+            if consecutive >= MAX_CONSECUTIVE_BACKFILL_FAILURES:
+                print(f"\nStopping: {consecutive} consecutive seasons failed. "
+                      f"That is systemic, not one bad season.\n"
+                      f"See {log_path} and raw.failed_ingestions.")
+                break
+
+    hours = (time.monotonic() - started) / 3600
+    print(f"\nBackfill finished in {hours:.2f}h.")
+    print(f"seasons with failures: {', '.join(failed_seasons) or 'none'}")
+    print("\nNext:  python tasks.py transform    # the tests are the real verdict")
+    if failed_seasons:
+        raise SystemExit(1)
+
+
 def task_transform(args) -> None:
     """Build and test the dbt models.
 
@@ -219,6 +315,7 @@ TASKS = {
     "migrate": task_migrate,
     "verify": task_verify,
     "ingest": task_ingest,
+    "backfill": task_backfill,
 }
 
 
@@ -233,6 +330,22 @@ def main() -> int:
                                      help="one or more seasons; loaded newest first")
             task_parser.add_argument("--skip-reference", action="store_true",
                                      help="reference data is already loaded")
+        if name == "backfill":
+            task_parser.add_argument("--from", dest="from_season", type=int,
+                                     default=FIRST_SEASON,
+                                     help=f"oldest season, inclusive "
+                                          f"(default {FIRST_SEASON})")
+            task_parser.add_argument("--to", dest="to_season", type=int,
+                                     default=LAST_HISTORICAL_SEASON,
+                                     help=f"newest season, inclusive (default "
+                                          f"{LAST_HISTORICAL_SEASON}; current "
+                                          f"seasons are `ingest`'s job)")
+            # Not merely a default: passing the ORIGINAL date is what makes a
+            # resumed run load rather than silently skip. See task_backfill.
+            task_parser.add_argument("--partition",
+                                     default=datetime.now(UTC).strftime("%Y-%m-%d"),
+                                     help="lake partition (default: today UTC). "
+                                          "To resume, pass the original date")
         if name == "migrate":
             task_parser.add_argument("--status", action="store_true",
                                      help="show state without applying anything")

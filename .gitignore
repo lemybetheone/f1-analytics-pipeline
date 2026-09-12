@@ -27,6 +27,9 @@ dbt/dbt_packages/
 dbt/logs/
 dbt/.user.yml
 
+# Run logs (backfill output; regenerable, and large)
+logs/
+
 # Airflow
 airflow/logs/
 airflow/plugins/__pycache__/
