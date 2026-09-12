@@ -1,0 +1,67 @@
+version: 2
+
+models:
+  - name: dim_driver
+    description: >
+      One row per driver in F1 history (881), plus one **Unknown member** —
+      882 rows total.
+
+      **Type 1**, no history. Measured rather than assumed: Phase 0 found
+      nothing in this source that mutates an attribute over time
+      (ARCHITECTURE decisions 18, 19).
+
+      A driver's constructor is deliberately **not** an attribute here — it
+      changes within a season, so it lives on `fct_results` at race grain.
+
+      **Grain: driver_key.**
+    columns:
+      - name: driver_key
+        description: >
+          Surrogate key, hashed from `driver_id`. Facts join on this rather
+          than on the source id, so a source-side rename would change this
+          model only and leave every fact's join intact.
+
+          The Unknown member's key comes from `unknown_key()`, defined once so
+          the value written by dimensions and the value read by facts cannot
+          drift apart.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: driver_id
+        description: >
+          Natural key, retained for traceability back to `raw.drivers` and for
+          reconciling counts against the source. `-1` on the Unknown member.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: full_name
+        description: >
+          'Unknown driver' on the Unknown member, so it is recognisable in a
+          result set rather than appearing as a blank row.
+        data_tests:
+          - not_null
+
+      - name: is_unknown
+        description: >
+          Flags the synthetic row. Analysis that should exclude unmatched facts
+          filters on this rather than on a magic id, and its presence in a
+          result set is a signal worth investigating — with coverage measured
+          at 100%, a fact landing here means the source has drifted.
+        data_tests:
+          - not_null
+
+      - name: date_of_birth
+        description: >
+          Null on the Unknown member and on the 16 reserve drivers who have
+          never started a race. Untested, as in staging.
+
+      - name: driver_code
+        description: "Three-letter TV code. Legitimately null for most of history."
+      - name: permanent_number
+        description: "Career number, only issued from 2014. Legitimately null."
+      - name: nationality
+        description: "Free text. Null for the 16 non-racing drivers."
+      - name: wikipedia_url
+        description: "Reference link. Descriptive; untested."
