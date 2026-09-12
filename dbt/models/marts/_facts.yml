@@ -281,15 +281,18 @@ models:
 
   - name: fct_constructor_standings
     description: >
-      The constructors' championship after each round (623 rows). Twin of
+      The constructors' championship after each round (13,624 rows, 1958–2026 —
+      there was no constructors' title before 1958). Twin of
       `fct_driver_standings`.
 
       **A periodic snapshot** — `points` is a running total and not additive
       across rounds.
 
-      Simpler than its twin in two ways, both verified rather than assumed:
-      `championship_position` is present on every row (no '-' marker), and the
-      source gives a single `Constructor` object rather than a list.
+      Simpler than its twin in exactly one way: the source gives a single
+      `Constructor` object rather than a list, so there is no cardinality to
+      preserve. A second claim — that `championship_position` is present on
+      every row — held for 2024–2026 and did not survive the historical
+      backfill.
 
       **Grain: (season, round, constructor_key).**
     data_tests:
@@ -321,8 +324,19 @@ models:
       - name: wins
         data_tests: [not_null]
       - name: championship_position
-        description: "Present on every row here, unlike driver standings."
-        data_tests: [not_null]
+        description: >
+          **Legitimately null on 3,107 rows**, almost all of them before 1990.
+          Deliberately untested; use `is_unranked`.
       - name: position_text
-        description: "Numeric throughout — no '-' marker in this table."
+        description: >
+          Numeric when ranked, '-' where the source declines to rank, 'E' where
+          the constructor was excluded from the championship.
+        data_tests: [not_null]
+      - name: is_unranked
+        description: "True where the source gives no championship position."
+        data_tests: [not_null]
+      - name: is_excluded
+        description: >
+          Narrower than `is_unranked`: the constructor raced and was struck
+          from the standings. McLaren 2007 (Spygate) is the only case so far.
         data_tests: [not_null]
