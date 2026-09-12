@@ -192,3 +192,113 @@ models:
           a circuit, so a fact landing here means the source has drifted.
         data_tests:
           - not_null
+  - name: dim_race
+    description: >
+      One row per race in F1 history (1,172), plus one **Unknown member** —
+      1,173 rows total. The event dimension: facts join here for season, round
+      and date context, and through it to `dim_circuit`.
+
+      **Type 1**, no history. Includes races that have not yet been run — 10 at
+      the time of writing — because a scheduled race is a real event with a real
+      date; facts simply have no rows for it yet. Use `has_been_run` rather than
+      re-deriving a date comparison.
+
+      **Grain: race_key.**
+    data_tests:
+      # The natural key is composite, so it needs a composite test even though
+      # the surrogate is single-column. Testing only `race_key` would prove the
+      # hash is unique without proving the pair behind it is.
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, round]
+    columns:
+      - name: race_key
+        description: >
+          Surrogate key, hashed from `(season, round)` together.
+          `generate_surrogate_key` separates the parts before hashing, so
+          (2024, 11) and (20, 2411) cannot collide.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: season
+        description: "Cast to int upstream so it sorts and joins numerically. -1 on the Unknown member."
+        data_tests:
+          - not_null
+
+      - name: round
+        description: "Round within the season. -1 on the Unknown member."
+        data_tests:
+          - not_null
+
+      - name: race_name
+        description: "e.g. 'Chinese Grand Prix'. 'Unknown race' on the synthetic row."
+        data_tests:
+          - not_null
+
+      - name: circuit_key
+        description: >
+          Foreign key to `dim_circuit`, and what facts join through for
+          circuit-level rollups (SCHEMA §5).
+
+          Tested strictly: all 1,172 races resolve to a circuit, so a failure
+          here means the reference load has drifted rather than a known gap
+          being rediscovered. The join that produces it is an inner join for
+          the same reason — failing loudly beats silently routing to Unknown.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_circuit')
+                field: circuit_key
+
+      - name: circuit_id
+        description: >
+          Natural key to the circuit, kept alongside the surrogate for
+          traceability back to `raw.races`. Honest denormalisation: two columns
+          for one relationship, in step only because both derive from the same
+          source column in this model.
+        data_tests:
+          - not_null
+
+      - name: race_date
+        description: "Race day. Null only on the Unknown member."
+
+      - name: has_been_run
+        description: >
+          Whether the race has taken place. The schedule carries future races,
+          so a fact having no rows for a race is expected rather than a gap.
+          Null on the Unknown member.
+
+      - name: is_sprint_weekend
+        description: "True for 30 of 1,172 races. Null on the Unknown member."
+
+      - name: race_start_utc
+        description: >
+          Scheduled start. **Legitimately null on ~62% of races** — the source
+          records a start time for only 37.6% of them. Untested.
+
+      - name: practice_1_utc
+        description: "Null except on modern weekends — present on 9.8% of races."
+      - name: practice_2_utc
+        description: "Present on 7.8%. Absent on sprint weekends, which run one practice."
+      - name: practice_3_utc
+        description: "Present on 7.5%. Absent on sprint weekends."
+      - name: qualifying_utc
+        description: "Present on 9.8% of races."
+      - name: sprint_utc
+        description: "Present on 2.3% — sprint weekends only."
+      - name: sprint_qualifying_utc
+        description: >
+          Present on 2.0%. Coalesced upstream across the source's two names for
+          this session, `SprintQualifying` and `SprintShootout`.
+
+      - name: wikipedia_url
+        description: "Reference link. Descriptive; untested."
+
+      - name: is_unknown
+        description: >
+          Flags the synthetic row. Every race resolves to a circuit today, so a
+          fact landing here means the source has drifted.
+        data_tests:
+          - not_null
