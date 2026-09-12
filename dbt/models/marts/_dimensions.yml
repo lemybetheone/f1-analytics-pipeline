@@ -1,0 +1,401 @@
+version: 2
+
+models:
+  - name: dim_driver
+    description: >
+      One row per driver in F1 history (881), plus one **Unknown member** —
+      882 rows total.
+
+      **Type 1**, no history. Measured rather than assumed: Phase 0 found
+      nothing in this source that mutates an attribute over time
+      (ARCHITECTURE decisions 18, 19).
+
+      A driver's constructor is deliberately **not** an attribute here — it
+      changes within a season, so it lives on `fct_results` at race grain.
+
+      **Grain: driver_key.**
+    columns:
+      - name: driver_key
+        description: >
+          Surrogate key, hashed from `driver_id`. Facts join on this rather
+          than on the source id, so a source-side rename would change this
+          model only and leave every fact's join intact.
+
+          The Unknown member's key comes from `unknown_key()`, defined once so
+          the value written by dimensions and the value read by facts cannot
+          drift apart.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: driver_id
+        description: >
+          Natural key, retained for traceability back to `raw.drivers` and for
+          reconciling counts against the source. `-1` on the Unknown member.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: full_name
+        description: >
+          'Unknown driver' on the Unknown member, so it is recognisable in a
+          result set rather than appearing as a blank row.
+        data_tests:
+          - not_null
+
+      - name: is_unknown
+        description: >
+          Flags the synthetic row. Analysis that should exclude unmatched facts
+          filters on this rather than on a magic id, and its presence in a
+          result set is a signal worth investigating — with coverage measured
+          at 100%, a fact landing here means the source has drifted.
+        data_tests:
+          - not_null
+
+      - name: date_of_birth
+        description: >
+          Null on the Unknown member and on the 16 reserve drivers who have
+          never started a race. Untested, as in staging.
+
+      - name: driver_code
+        description: "Three-letter TV code. Legitimately null for most of history."
+      - name: permanent_number
+        description: "Career number, only issued from 2014. Legitimately null."
+      - name: nationality
+        description: "Free text. Null for the 16 non-racing drivers."
+      - name: wikipedia_url
+        description: "Reference link. Descriptive; untested."
+
+  - name: dim_constructor
+    description: >
+      One row per constructor in F1 history (214), plus one **Unknown
+      member** — 215 rows total.
+
+      **Type 1.** This is the dimension where that was hard-won: PRD §6
+      originally locked it as SCD Type 2 for rebrands, and Phase 0 evidence
+      reversed it (ARCHITECTURE decision 18). No `constructor_id` was ever
+      observed carrying two names across 1996–2024 — each rebrand is a
+      distinct id upstream, so there is no attribute for Type 2 to track.
+
+      **Grain: constructor_key.**
+    columns:
+      - name: constructor_key
+        description: >
+          Surrogate key, hashed from `constructor_id`. The Unknown member's key
+          comes from `unknown_key()`, shared with every other dimension.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: constructor_id
+        description: >
+          Natural key, retained for traceability back to `raw.constructors`.
+          `-1` on the Unknown member.
+
+          Note that `toro_rosso`, `alphatauri` and `rb` are three separate rows
+          here, not one row with three versions — that is the source's model,
+          faithfully reproduced.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: constructor_name
+        description: >
+          Team name as the source spells it. 'Unknown constructor' on the
+          synthetic row. Distinct across all 214 today but deliberately not
+          tested for uniqueness — nothing joins on it.
+        data_tests:
+          - not_null
+
+      - name: nationality
+        description: >
+          Licensing nationality, 24 distinct values. Free text, so no
+          `accepted_values` test — the list grows when a team licenses under a
+          new country. Null on the Unknown member.
+
+      - name: wikipedia_url
+        description: "Reference link. Descriptive; untested."
+
+      - name: is_unknown
+        description: >
+          Flags the synthetic row. A fact landing here is worth investigating —
+          Phase 0 measured constructor coverage at 100%, so it would mean the
+          source has drifted.
+        data_tests:
+          - not_null
+
+  - name: dim_circuit
+    description: >
+      One row per circuit in F1 history (78), plus one **Unknown member** —
+      79 rows total.
+
+      **Type 1**, no history. Used for circuit-level rollups in PRD §6 theme 5
+      and joined from `dim_race`.
+
+      **Grain: circuit_key.**
+    columns:
+      - name: circuit_key
+        description: >
+          Surrogate key, hashed from `circuit_id`. The Unknown member's key
+          comes from `unknown_key()`, identical across every dimension.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: circuit_id
+        description: >
+          Natural key, retained for traceability back to `raw.circuits`.
+          `-1` on the Unknown member.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: circuit_name
+        description: >
+          Full name, e.g. 'Silverstone Circuit'. 'Unknown circuit' on the
+          synthetic row, so it is recognisable rather than blank.
+
+          Unique across all 78 today, but deliberately untested for uniqueness:
+          nothing joins on it, and two circuits sharing a name would be a fact
+          about the sport rather than a defect.
+        data_tests:
+          - not_null
+
+      - name: country
+        description: >
+          Free text as the source spells it — 'UK', 'USA' and 'UAE' sit
+          alongside 'South Africa', so it is neither ISO names nor codes and
+          any external join needs an explicit mapping. 34 distinct values.
+
+          **Null on the Unknown member**, deliberately: a placeholder country
+          would join to a real one in a rollup and quietly inflate it. That is
+          why this carries no `not_null` test here despite having one in
+          `stg_circuits`.
+
+      - name: locality
+        description: >
+          City or region. Not unique — Barcelona has three circuits, Madrid and
+          California two each. Descriptive; nothing joins on it. Null on the
+          Unknown member, as `country`.
+
+      - name: latitude
+        description: >
+          Decimal degrees, double precision. Untested — not a join key, and a
+          coordinate is an approximation with no invariant worth asserting.
+
+      - name: longitude
+        description: "Decimal degrees, double precision. Untested, as latitude."
+
+      - name: is_unknown
+        description: >
+          Flags the synthetic row. Phase 0 measured all 1,172 races resolving to
+          a circuit, so a fact landing here means the source has drifted.
+        data_tests:
+          - not_null
+  - name: dim_race
+    description: >
+      One row per race in F1 history (1,172), plus one **Unknown member** —
+      1,173 rows total. The event dimension: facts join here for season, round
+      and date context, and through it to `dim_circuit`.
+
+      **Type 1**, no history. Includes races that have not yet been run — 10 at
+      the time of writing — because a scheduled race is a real event with a real
+      date; facts simply have no rows for it yet. Use `has_been_run` rather than
+      re-deriving a date comparison.
+
+      **Grain: race_key.**
+    data_tests:
+      # The natural key is composite, so it needs a composite test even though
+      # the surrogate is single-column. Testing only `race_key` would prove the
+      # hash is unique without proving the pair behind it is.
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, round]
+    columns:
+      - name: race_key
+        description: >
+          Surrogate key, hashed from `(season, round)` together.
+          `generate_surrogate_key` separates the parts before hashing, so
+          (2024, 11) and (20, 2411) cannot collide.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: season
+        description: "Cast to int upstream so it sorts and joins numerically. -1 on the Unknown member."
+        data_tests:
+          - not_null
+
+      - name: round
+        description: "Round within the season. -1 on the Unknown member."
+        data_tests:
+          - not_null
+
+      - name: race_name
+        description: "e.g. 'Chinese Grand Prix'. 'Unknown race' on the synthetic row."
+        data_tests:
+          - not_null
+
+      - name: circuit_key
+        description: >
+          Foreign key to `dim_circuit`, and what facts join through for
+          circuit-level rollups (SCHEMA §5).
+
+          Tested strictly: all 1,172 races resolve to a circuit, so a failure
+          here means the reference load has drifted rather than a known gap
+          being rediscovered. The join that produces it is an inner join for
+          the same reason — failing loudly beats silently routing to Unknown.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_circuit')
+                field: circuit_key
+
+      - name: circuit_id
+        description: >
+          Natural key to the circuit, kept alongside the surrogate for
+          traceability back to `raw.races`. Honest denormalisation: two columns
+          for one relationship, in step only because both derive from the same
+          source column in this model.
+        data_tests:
+          - not_null
+
+      - name: race_date
+        description: "Race day. Null only on the Unknown member."
+
+      - name: has_been_run
+        description: >
+          Whether the race has taken place. The schedule carries future races,
+          so a fact having no rows for a race is expected rather than a gap.
+          Null on the Unknown member.
+
+      - name: is_sprint_weekend
+        description: "True for 30 of 1,172 races. Null on the Unknown member."
+
+      - name: race_start_utc
+        description: >
+          Scheduled start. **Legitimately null on ~62% of races** — the source
+          records a start time for only 37.6% of them. Untested.
+
+      - name: practice_1_utc
+        description: "Null except on modern weekends — present on 9.8% of races."
+      - name: practice_2_utc
+        description: "Present on 7.8%. Absent on sprint weekends, which run one practice."
+      - name: practice_3_utc
+        description: "Present on 7.5%. Absent on sprint weekends."
+      - name: qualifying_utc
+        description: "Present on 9.8% of races."
+      - name: sprint_utc
+        description: "Present on 2.3% — sprint weekends only."
+      - name: sprint_qualifying_utc
+        description: >
+          Present on 2.0%. Coalesced upstream across the source's two names for
+          this session, `SprintQualifying` and `SprintShootout`.
+
+      - name: wikipedia_url
+        description: "Reference link. Descriptive; untested."
+
+      - name: is_unknown
+        description: >
+          Flags the synthetic row. Every race resolves to a circuit today, so a
+          fact landing here means the source has drifted.
+        data_tests:
+          - not_null
+
+  - name: dim_status
+    description: >
+      One row per finishing status (136), plus one **Unknown member** —
+      137 rows total.
+
+      SCHEMA §4 marks this dimension optional, and that is fair: PRD §6 theme 6
+      is answerable without it. What it adds is a **coarser rollup** the raw
+      136-value list cannot give, and a surrogate key so the fact stops carrying
+      free text for a categorical.
+
+      **The surrogate hashes `status`, not `status_id`** — results carry the
+      description and no statusId, so the text is the real join key.
+
+      **Grain: status_key.**
+    columns:
+      - name: status_key
+        description: >
+          Surrogate key, hashed from the status **text**. Facts join on this.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: status_id
+        description: >
+          The source's numeric id. Retained for traceability, but **not** the
+          join key — results do not carry it.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: status
+        description: >
+          The description, e.g. 'Finished', '+1 Lap', 'Engine'. Unique across
+          all 136, and tested for it because that uniqueness is load-bearing:
+          a duplicate would fan out every fact row joined to it.
+        data_tests:
+          - unique
+          - not_null
+
+      - name: status_category
+        description: >
+          **Curated grouping — this is the one place an opinion is encoded as
+          data in this warehouse**, so it is worth reading the model header
+          before trusting it.
+
+          Every non-mechanical outcome is enumerated and everything else falls
+          through to `mechanical`. Verified against all 136: the 82 that fall
+          through are Engine, Gearbox, Suspension, Transmission, Electrical,
+          Brakes and similar — mechanical without exception.
+
+          The risk that creates is that a *new* non-mechanical status added
+          upstream would be filed silently as mechanical. The exception lists
+          in the model are where such an outcome gets added. Defaulting to
+          'unclassified' instead was considered and rejected: it would put
+          6,654 all-time rows into a bucket that answers nothing.
+        data_tests:
+          - not_null
+          # Safe to enumerate, unlike `status` itself: this vocabulary is ours,
+          # not the source's, so it only changes when we change it.
+          - accepted_values:
+              arguments:
+                values:
+                  - finished
+                  - lapped
+                  - mechanical
+                  - collision
+                  - disqualified
+                  - non_start_or_other
+                  - unknown
+
+      - name: status_implies_running_at_end
+        description: >
+          Whether the status describes a car still running at the end.
+
+          **This is not the same question as whether the driver was
+          classified**, and conflating them was a real bug: the two disagreed
+          on 20 of 1,244 rows. Russell in 2024 round 3 has status 'Retired'
+          after 56 laps yet positionText '17' — classified, because he covered
+          enough race distance. The reverse occurs too: status 'Lapped' with
+          positionText 'R'.
+
+          Status describes how the car ran; `positionText` records what the
+          stewards decided. **For DNF rate use `stg_results.is_classified`**,
+          which reads the official marker. Null on the Unknown member.
+
+      - name: source_all_time_count
+        description: >
+          The API's all-time occurrence count for the scope queried — **not a
+          metric**. It will disagree with anything counted from the facts until
+          the historical backfill completes, and is kept as the input to that
+          reconciliation. Null on the Unknown member.
+
+      - name: is_unknown
+        description: "Flags the synthetic row."
+        data_tests:
+          - not_null
