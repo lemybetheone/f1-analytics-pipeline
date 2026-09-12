@@ -9,10 +9,15 @@
 -- **A periodic snapshot**, so `points` is a running total and **not additive
 -- across rounds**. The snapshot key is `round`, already in the natural key.
 --
--- Simpler than its twin in two ways, both verified rather than assumed:
--- `championship_position` is present on every row here (no '-' marker, unlike
--- driver standings), and `Constructor` is a single object rather than a list.
--- Two tables looking alike is exactly when a shared assumption goes wrong.
+-- Simpler than its twin in exactly one way: `Constructor` is a single object
+-- rather than a list, so there is no cardinality to preserve.
+--
+-- This header used to claim a second way — that `championship_position` is
+-- present on every row, unlike driver standings. That was checked, and true of
+-- the 2024-2026 data it was checked against. The historical backfill made it
+-- false: 3,107 null rows, most of them pre-1990, plus McLaren's 2007
+-- exclusion. Two tables looking alike is indeed when a shared assumption goes
+-- wrong — the assumption here was just the opposite one.
 
 with standings as (
 
@@ -41,8 +46,11 @@ joined as (
         standings.points,
         standings.wins,
 
+        -- Legitimately null across the early history; use the flags below.
         standings.championship_position,
         standings.position_text,
+        standings.is_unranked,
+        standings.is_excluded,
 
         standings.source_key,
         standings.ingested_at,

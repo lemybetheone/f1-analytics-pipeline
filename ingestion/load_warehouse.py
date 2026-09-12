@@ -8,7 +8,9 @@ shortcut would work fine today and quietly make the architecture diagram false.
 
 from __future__ import annotations
 
+import contextlib
 import json
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
@@ -221,21 +223,71 @@ class WarehouseBudget:
 
     Autocommit for the same reason: a call that is recorded but uncommitted is
     a call no other process can see, which is the whole failure being fixed.
+
+    **Reconnects on a dropped connection.** This connection is the longest-lived
+    thing in the process — a backfill holds it for hours while it sleeps out the
+    rate limit — which makes it exactly what a pooler reaps. Measured: the
+    2026-09-12 backfill lost it after 6.5 hours (`server closed the connection
+    unexpectedly`) and took that season's whole phase down with it, while the
+    data connection alongside it was fine. Losing a season to bookkeeping is a
+    bad trade for a connection that is trivially re-openable.
     """
+
+    # One reconnect handles a reaped connection; a few short retries ride out a
+    # blip. Beyond that the database is genuinely gone and failing is correct —
+    # a budget that cannot be recorded must not be silently ignored, or the
+    # process would spend the allowance blind.
+    MAX_ATTEMPTS = 3
+    RETRY_BACKOFF_SECONDS = 2
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.conn = psycopg.connect(
-            host=settings.warehouse_host,
-            port=settings.warehouse_port,
-            dbname=settings.warehouse_database,
-            user=settings.warehouse_user,
-            password=settings.warehouse_password,
+        self.conn = self._connect()
+        self._table = sql.SQL("{}.{}").format(
+            sql.Identifier(settings.schema_raw), sql.Identifier("api_call_log"))
+
+    def _connect(self):
+        return psycopg.connect(
+            host=self.settings.warehouse_host,
+            port=self.settings.warehouse_port,
+            dbname=self.settings.warehouse_database,
+            user=self.settings.warehouse_user,
+            password=self.settings.warehouse_password,
             connect_timeout=15,
             autocommit=True,
         )
-        self._table = sql.SQL("{}.{}").format(
-            sql.Identifier(settings.schema_raw), sql.Identifier("api_call_log"))
+
+    def _execute(self, query, params, *, fetch: bool = False):
+        """Run one statement, reconnecting once per attempt if the link died.
+
+        Every statement here is safe to repeat. `usage` and `prune` are
+        idempotent outright. `record` is an insert, so a retry can double-count
+        a call whose commit landed just as the connection dropped — but the
+        budget is a ceiling, and over-counting by one spends an allowance we
+        had while under-counting would exceed a limit the terms let the source
+        block us for. The safe direction is the conservative one.
+        """
+        last_error: psycopg.OperationalError | None = None
+
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(query, params)
+                    return cur.fetchone() if fetch else cur.rowcount
+            except psycopg.OperationalError as exc:
+                last_error = exc
+                if attempt == self.MAX_ATTEMPTS:
+                    break
+                time.sleep(self.RETRY_BACKOFF_SECONDS * attempt)
+                # Already dead; closing is a courtesy, not a step.
+                with contextlib.suppress(psycopg.Error):
+                    self.conn.close()
+                try:
+                    self.conn = self._connect()
+                except psycopg.OperationalError as reconnect_error:
+                    last_error = reconnect_error
+
+        raise last_error
 
     def usage(self, window_seconds: int) -> tuple[int, float]:
         """(calls inside the window, seconds until the oldest leaves it).
@@ -243,23 +295,20 @@ class WarehouseBudget:
         Both numbers come from the database's clock in a single statement, so
         they cannot disagree with each other or drift against a local clock.
         """
-        with self.conn.cursor() as cur:
-            cur.execute(
-                sql.SQL("""
-                    select count(*),
-                           coalesce(extract(epoch from (
-                               min(called_at) + make_interval(secs => %s) - now()
-                           )), 0)
-                    from {} where called_at > now() - make_interval(secs => %s)
-                """).format(self._table), (window_seconds, window_seconds))
-            count, seconds = cur.fetchone()
-            return (int(count), max(float(seconds), 0.0))
+        count, seconds = self._execute(
+            sql.SQL("""
+                select count(*),
+                       coalesce(extract(epoch from (
+                           min(called_at) + make_interval(secs => %s) - now()
+                       )), 0)
+                from {} where called_at > now() - make_interval(secs => %s)
+            """).format(self._table), (window_seconds, window_seconds), fetch=True)
+        return (int(count), max(float(seconds), 0.0))
 
     def record(self, entity: str | None = None) -> None:
-        with self.conn.cursor() as cur:
-            cur.execute(
-                sql.SQL("insert into {} (entity) values (%s)").format(self._table),
-                (entity,))
+        self._execute(
+            sql.SQL("insert into {} (entity) values (%s)").format(self._table),
+            (entity,))
 
     def prune(self, keep_seconds: int = 7200) -> int:
         """Drop rows too old to affect the window. Returns rows removed.
@@ -268,11 +317,9 @@ class WarehouseBudget:
         table would otherwise grow without bound for no benefit. Twice the
         window is kept as headroom for inspecting a throttling incident.
         """
-        with self.conn.cursor() as cur:
-            cur.execute(
-                sql.SQL("delete from {} where called_at < now() - make_interval(secs => %s)")
-                .format(self._table), (keep_seconds,))
-            return cur.rowcount
+        return self._execute(
+            sql.SQL("delete from {} where called_at < now() - make_interval(secs => %s)")
+            .format(self._table), (keep_seconds,))
 
     def close(self) -> None:
         self.conn.close()

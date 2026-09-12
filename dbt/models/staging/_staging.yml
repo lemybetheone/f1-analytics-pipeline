@@ -723,16 +723,19 @@ models:
 
   - name: stg_constructor_standings
     description: >
-      Constructors' championship after each round (601 rows for 2024–2026).
-      Counterpart to `stg_driver_standings`, split by entity rather than
-      combined into one polymorphic fact — a key that is sometimes a driver and
-      sometimes a constructor needs a nullable foreign key and breaks clean
+      Constructors' championship after each round (13,624 rows, 1958–2026 —
+      the constructors' title did not exist before 1958). Counterpart to
+      `stg_driver_standings`, split by entity rather than combined into one
+      polymorphic fact — a key that is sometimes a driver and sometimes a
+      constructor needs a nullable foreign key and breaks clean
       `relationships` tests on both sides (PRD §6).
 
-      The cleanest payload in the project: five keys, all present on every row,
-      no missing positions, no '-' marker, and `Constructor` is a single object
-      rather than a list. Verified rather than assumed — two tables looking
-      alike is exactly when a shared assumption goes wrong.
+      `Constructor` is a single object rather than the driver standings' list,
+      so there is no cardinality to preserve here. That is the only way this is
+      simpler than its twin — an earlier version of this description also
+      claimed "no missing positions, no '-' marker", which was true of the
+      2024–2026 sample it was checked against and false across the full
+      history. See `championship_position`.
 
       **Grain: (season, round, constructor_id).**
     data_tests:
@@ -752,10 +755,26 @@ models:
                 to: ref('stg_constructors')
                 field: constructor_id
       - name: championship_position
-        description: "Present on every row here, unlike driver standings."
-        data_tests: [not_null]
+        description: >
+          **Legitimately null on 3,107 rows**, concentrated in the early
+          history — 739 of the 1970s' 2,114 rows against 1 in the 2020s. 3,090
+          carry `positionText` '-' (the source declining to rank), and 17 carry
+          'E': McLaren in 2007, excluded from the championship.
+
+          Deliberately untested for null. Use `is_unranked`, or `is_excluded`
+          for the narrower question.
       - name: position_text
-        description: "Numeric throughout — no '-' marker in this table."
+        description: >
+          Numeric for a ranked constructor; '-' where the source declines to
+          rank, 'E' where the constructor was excluded. Always present.
+        data_tests: [not_null]
+      - name: is_unranked
+        description: "True where `championship_position` is null. Mirrors the driver twin."
+        data_tests: [not_null]
+      - name: is_excluded
+        description: >
+          Excluded from the championship, which is narrower than unranked — the
+          constructor raced and scored nothing rather than simply being untied.
         data_tests: [not_null]
       - name: points
         data_tests: [not_null]

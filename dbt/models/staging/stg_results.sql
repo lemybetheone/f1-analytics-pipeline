@@ -48,7 +48,14 @@ typed as (
         -- correct when the source fixes a spelling.
         payload -> 'Constructor' ->> 'constructorId' as constructor_id,
 
-        (payload ->> 'number')::int    as car_number,
+        -- `nullif` because the source ships the literal string 'None' here on
+        -- six rows — 1961 r4, 1962 r4, 1963 r10, every one of them a withdrawn
+        -- entry (positionText = 'W'). Verified in the landed lake object: it
+        -- arrives that way from the API, a stringified Python None that Ergast
+        -- exported and Jolpica inherited. Only `results.number` carries it;
+        -- every other raw table is clean, so this is named where it occurs
+        -- rather than guarded against everywhere.
+        nullif(payload ->> 'number', 'None')::int as car_number,
 
         -- 0 is a pit lane start, and is meaningful rather than missing.
         (payload ->> 'grid')::int      as grid_position,

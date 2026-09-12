@@ -12,14 +12,17 @@
 PYTHON ?= python
 SEASON ?= 2024
 
-.PHONY: help setup check lint test migrate verify ingest
+.PHONY: help setup check lint test migrate verify ingest backfill transform docs
 
 help:
-	@echo "setup    create .venv, install pinned dependencies, install git hooks"
-	@echo "check    lint + unit tests (exactly what CI runs)"
-	@echo "migrate  apply pending database migrations"
-	@echo "verify   prove warehouse and lake connectivity"
-	@echo "ingest   full ingest for one season   (make ingest SEASON=2023)"
+	@echo "setup      create .venv, install pinned dependencies, install git hooks"
+	@echo "check      lint + unit tests (exactly what CI runs)"
+	@echo "migrate    apply pending database migrations"
+	@echo "verify     prove warehouse and lake connectivity"
+	@echo "ingest     full ingest for one season   (make ingest SEASON=2023)"
+	@echo "backfill   the historical seasons, newest first (~7.6h, resumable)"
+	@echo "transform  build and test the dbt models"
+	@echo "docs       generate the lineage graph and column docs"
 
 setup:
 	$(PYTHON) tasks.py setup
@@ -41,3 +44,12 @@ verify:
 
 ingest:
 	$(PYTHON) tasks.py ingest --season $(SEASON)
+
+backfill:
+	$(PYTHON) tasks.py backfill
+
+transform:
+	$(PYTHON) tasks.py transform
+
+docs:
+	$(PYTHON) tasks.py docs
