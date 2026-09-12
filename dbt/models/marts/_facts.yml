@@ -140,3 +140,189 @@ models:
 
       - name: source_key
         description: "Lake object this row traces back to."
+
+  - name: fct_sprint_results
+    description: >
+      One row per driver per sprint race (350 rows). Sprint weekends only — 30
+      of 1,172 races in the whole dataset.
+
+      **A separate fact rather than a `session_type` column on `fct_results`**
+      (ARCHITECTURE decision 28). Unioning them would make every existing query
+      wrong by default: finishing order, DNF rate and positions gained would
+      include sprint rows unless the author remembered the filter. Separate
+      facts are right by default; the one query needing both — total
+      championship points — does an explicit union.
+
+      Structurally identical to `fct_results` but with no average-speed
+      measure: sprint payloads carry no `FastestLap.AverageSpeed` at all.
+
+      **Grain: (race_key, driver_key).**
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [race_key, driver_key]
+    columns:
+      - name: race_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_race')
+                field: race_key
+      - name: driver_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_driver')
+                field: driver_key
+      - name: constructor_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_constructor')
+                field: constructor_key
+      - name: status_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_status')
+                field: status_key
+      - name: season
+        data_tests: [not_null]
+      - name: round
+        data_tests: [not_null]
+      - name: points
+        description: "Sprint points — 8 down to 1 for the top eight. Additive."
+        data_tests: [not_null]
+      - name: position_text
+        description: "Outcome marker: numeric, or R, W, D."
+        data_tests: [not_null]
+      - name: is_classified
+        description: "Authoritative finish flag, from position_text."
+        data_tests: [not_null]
+
+  - name: fct_driver_standings
+    description: >
+      The drivers' championship after each round (1,305 rows).
+
+      **A periodic snapshot**, so `points` is a running total and **not additive
+      across rounds** — summing it over a season counts every point once per
+      subsequent round. The snapshot key is `round`, already part of the natural
+      key, which is why no `snapshot_date` column is needed.
+
+      Split by entity rather than keyed polymorphically (PRD §6): a fact keyed
+      on "sometimes a driver, sometimes a constructor" needs a nullable foreign
+      key and breaks clean `relationships` tests on both sides.
+
+      **Grain: (season, round, driver_key).**
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, round, driver_key]
+    columns:
+      - name: race_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_race')
+                field: race_key
+      - name: driver_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_driver')
+                field: driver_key
+      - name: season
+        data_tests: [not_null]
+      - name: round
+        data_tests: [not_null]
+
+      - name: points
+        description: >
+          **Running total, not an increment.** Do not sum across rounds. To get
+          points scored in a round, difference consecutive snapshots — or use
+          `fct_results` and `fct_sprint_results`, which are additive.
+        data_tests: [not_null]
+
+      - name: wins
+        description: "Running total, as points."
+        data_tests: [not_null]
+
+      - name: championship_position
+        description: >
+          **Legitimately null on 8 rows** — the source declines to rank an
+          entirely tied field, all drivers on zero points early in a season.
+          Deliberately untested; use `is_unranked` to identify them.
+
+      - name: position_text
+        description: "Always present; carries '-' where position is null."
+        data_tests: [not_null]
+
+      - name: constructor_ids
+        description: >
+          The driver's constructors this season, as an array — **not
+          flattened**. 62 rows carry two, because a driver who changed team
+          mid-season raced for both. Collapsing it would silently pick one and
+          imply a driver has exactly one team per season. The single-valued
+          relationship lives on `fct_results` at race grain.
+
+      - name: constructor_count
+        description: "How many constructors the driver has raced for this season."
+        data_tests: [not_null]
+
+      - name: is_unranked
+        description: "True where the source declined to rank the driver."
+        data_tests: [not_null]
+
+  - name: fct_constructor_standings
+    description: >
+      The constructors' championship after each round (623 rows). Twin of
+      `fct_driver_standings`.
+
+      **A periodic snapshot** — `points` is a running total and not additive
+      across rounds.
+
+      Simpler than its twin in two ways, both verified rather than assumed:
+      `championship_position` is present on every row (no '-' marker), and the
+      source gives a single `Constructor` object rather than a list.
+
+      **Grain: (season, round, constructor_key).**
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns: [season, round, constructor_key]
+    columns:
+      - name: race_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_race')
+                field: race_key
+      - name: constructor_key
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_constructor')
+                field: constructor_key
+      - name: season
+        data_tests: [not_null]
+      - name: round
+        data_tests: [not_null]
+      - name: points
+        description: "**Running total, not an increment.** Do not sum across rounds."
+        data_tests: [not_null]
+      - name: wins
+        data_tests: [not_null]
+      - name: championship_position
+        description: "Present on every row here, unlike driver standings."
+        data_tests: [not_null]
+      - name: position_text
+        description: "Numeric throughout — no '-' marker in this table."
+        data_tests: [not_null]

@@ -229,6 +229,7 @@ strings to UTC timestamps (keeping the raw value) · declare and test grain.
 | Model | Grain | Type | Feeds §6 |
 |---|---|---|---|
 | `fct_results` | one row per **(race, driver)** | Transaction | Themes 2, 3, 4, 6 — the core fact |
+| `fct_sprint_results` | one row per **(race, driver)**, sprint weekends only | Transaction | Theme 1 — added 2026-09-12, see below |
 | `fct_driver_standings` | one row per **(season, round, driver)** | Periodic snapshot | Theme 1 |
 | `fct_constructor_standings` | one row per **(season, round, constructor)** | Periodic snapshot | Theme 1 |
 | `fct_qualifying` _(optional)_ | one row per **(race, driver)** | Transaction | Theme 3, only if Q1/Q2/Q3 times or quali≠grid needed |
@@ -237,6 +238,31 @@ strings to UTC timestamps (keeping the raw value) · declare and test grain.
 > `grid_position`, `finish_position`, `points`, `status`, and finish/DNF flags.
 > Both `driver_key` **and** `constructor_key` live here so teammate head-to-head
 > (Theme 4) is a self-join, not a new table.
+
+> **`fct_sprint_results` added 2026-09-12.** Building the standings facts
+> surfaced that the reconciliation this project already commits to — derive a
+> cumulative points total and check it against the official standings (PRD §6) —
+> **does not work from `fct_results` alone**. Measured against 2024: official
+> 437 for Verstappen, derived 399. Race points plus sprint points reconciles
+> exactly, for 24 of 24 drivers with zero residual.
+>
+> **Why a separate fact rather than a `session_type` column on `fct_results`.**
+> Unioning them was tempting — `stg_sprint` was deliberately given identical
+> column names so it would be possible — but it would make every existing query
+> *wrong by default*. Finishing order, DNF rate and positions gained would all
+> silently include sprint rows unless the author remembered
+> `where session_type = 'race'`. A fact whose grain requires a filter to be
+> correct is a reliable source of wrong numbers. Separate facts are right by
+> default, and the one query needing both does an explicit union.
+>
+> It also matches the shape already here: `fct_qualifying` is listed as a
+> separate session fact for the same reason. A sprint and a Grand Prix are
+> different business processes awarding different point scales.
+>
+> **Cost accepted:** "total points scored" now requires a union of two facts
+> rather than a single sum. That is the correct trade — the union is explicit
+> and appears in one place, while a forgotten filter is silent and appears
+> everywhere.
 
 ### Dimensions
 
