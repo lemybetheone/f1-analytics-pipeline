@@ -24,6 +24,17 @@
 -- era too — Puncture/Tyre puncture, Seat/Driver Seat, Injury/Injured — which
 -- split the same cause across two rows and, before this, across two categories.
 --
+-- **Alias only true synonyms; co-categorise everything else.** The rule is
+-- worth stating because the tempting version is wrong. `Withdrew` gives way to
+-- `Did not start` in 2023, which looks like a rename — but 23 of 245 `Withdrew`
+-- rows completed laps, one of them 74 (1996). The source used the word loosely
+-- for an entry pulled *after* running, so aliasing would make
+-- `status_canonical` assert "did not start" about a car that ran most of a
+-- race. `Eye injury` is the same shape: a *subtype* of injury rather than
+-- another word for it, and folding it in discards the only detail the source
+-- gave. Both share a category instead, which closes the 2023 discontinuity
+-- where it actually mattered while leaving the canonical name truthful.
+--
 -- **Aliasing is an attribute, never a change to the grain or the key.** The
 -- grain stays one row per raw status text and `status_key` still hashes
 -- `status`, because that is what `fct_results` hashes when it builds its own
@@ -81,10 +92,8 @@ aliased as (
             -- '+12 Laps' should not need a code change.
             when status ~ '^\+[0-9]+ Lap' then 'Lapped'
 
-            when status = 'Withdrew'      then 'Did not start'
             when status = 'Excluded'      then 'Disqualified'
             when status = 'Injured'       then 'Injury'
-            when status = 'Eye injury'    then 'Injury'
             when status = 'Driver unwell' then 'Illness'
             when status = 'Tyre puncture' then 'Puncture'
             when status = 'Driver Seat'   then 'Seat'
@@ -131,14 +140,28 @@ categorised as (
             when status_canonical in ('Disqualified', 'Underweight')
                 then 'disqualified'
 
+            -- Co-categorised rather than aliased, and the distinction matters.
+            -- The 2023 rename is real, but 'Withdrew' and 'Did not start' are
+            -- not synonyms: 23 of 245 'Withdrew' rows completed laps, one of
+            -- them 74 (1996). The source used the word loosely for an entry
+            -- pulled *after* running. Aliasing would make `status_canonical`
+            -- assert "did not start" about a car that ran most of a race.
+            -- Sharing a category still closes the 2023 discontinuity, which is
+            -- where the break actually mattered.
             when status_canonical in (
-                'Did not start', 'Did not qualify', 'Did not prequalify'
-            ) then 'did_not_start'
+                'Withdrew', 'Did not start', 'Did not qualify',
+                'Did not prequalify'
+            ) then 'withdrawn_or_dns'
 
             -- The driver, not the car. Previously split across two categories:
             -- 'Physical' and 'Eye injury' sat in mechanical while 'Injury' and
             -- 'Illness' sat in the catch-all.
-            when status_canonical in ('Injury', 'Illness', 'Physical')
+            --
+            -- 'Eye injury' is co-categorised rather than aliased for the same
+            -- reason as above: it is a *subtype* of injury, not another word
+            -- for it, and folding it in would discard the only detail the
+            -- source gave.
+            when status_canonical in ('Injury', 'Eye injury', 'Illness', 'Physical')
                 then 'driver_unavailable'
 
             -- The source records the outcome but not the reason. See header.

@@ -349,14 +349,20 @@ models:
           `fct_results` hashes. Hashing this instead would break every fact
           join silently.
 
-          It exists because the source renamed things: `+N Laps` became
-          `Lapped` in 2023, `Withdrew` became `Did not start` in 2023. Grouping
-          the raw text splits one concept in two at the rename, which would
-          show as a discontinuity in any time series that is an artefact of
-          vocabulary rather than of racing. Within-era near-duplicates are
-          folded here too — `Tyre puncture` into `Puncture`, `Driver Seat` into
-          `Seat`, `Injured` and `Eye injury` into `Injury`, `Excluded` into
-          `Disqualified`.
+          It exists because the source renamed things: `+N Laps` became a bare
+          `Lapped` in 2023. Grouping the raw text splits one concept in two at
+          the rename, which would show as a discontinuity in any time series
+          that is an artefact of vocabulary rather than of racing. Within-era
+          near-duplicates are folded here too — `Tyre puncture` into
+          `Puncture`, `Driver Seat` into `Seat`, `Injured` into `Injury`,
+          `Excluded` into `Disqualified`.
+
+          **Only true synonyms are aliased.** `Withdrew` gives way to `Did
+          not start` in 2023 and looks like a rename, but 23 of 245
+          `Withdrew` rows completed laps — one of them 74. It shares a
+          category instead, so the canonical name stays truthful. `Eye
+          injury` is treated the same way: a subtype of injury, not another
+          word for it.
 
           Not unique: that is the point. Several raw statuses share one
           canonical name.
@@ -409,7 +415,7 @@ models:
                   - mechanical
                   - collision
                   - disqualified
-                  - did_not_start
+                  - withdrawn_or_dns
                   - driver_unavailable
                   - cause_unspecified
                   - other
