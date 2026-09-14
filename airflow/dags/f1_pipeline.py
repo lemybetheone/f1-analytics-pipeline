@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 
 from airflow.providers.standard.operators.bash import BashOperator
 from airflow.sdk import dag
+from callbacks import report_failure
 
 PROJECT = "/opt/project"
 PY = "/home/airflow/project-venv/bin/python"
@@ -45,6 +46,7 @@ DBT = "/home/airflow/project-venv/bin/dbt"
     default_args={
         "retries": 2,
         "retry_delay": timedelta(minutes=5),
+        "on_failure_callback": report_failure,
     },
 )
 def f1_pipeline():
