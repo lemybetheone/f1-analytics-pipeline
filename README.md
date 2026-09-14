@@ -228,7 +228,7 @@ committed `pre-push` hook runs the same checks locally.
 | 0 — Discovery | Complete. Every payload validated against the live API before any table was designed |
 | 1 — Ingestion | Complete. 12 endpoints, full history loaded |
 | 2 — Transformation | Complete. Staging + marts, 234 passing nodes |
-| 3 — Orchestration | Not started |
+| 3 — Orchestration | In progress. Airflow running in Docker; the ingest → dbt DAG runs end to end. Scheduling and alerting still to come |
 | 4 — Serving & polish | Not started |
 
 ---
