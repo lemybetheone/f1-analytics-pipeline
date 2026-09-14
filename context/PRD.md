@@ -96,7 +96,7 @@ enhancement, not MVP.
 - [ ] Data quality tests pass on every model (grain + key integrity minimum).
 - [ ] One orchestrated scheduled run (DAG) that succeeds end to end.
 - [ ] A dashboard answering ≥3 real analytical questions.
-- [ ] README with architecture diagram and a "run it in 3 commands" section.
+- [ ] README with architecture diagram and a minimal run sequence (§9a).
 
 ## 6. Analytical questions the model must answer
 
@@ -273,11 +273,21 @@ it and never open a source file. Treat it as a deliverable with a defined shape.
 
 1. **One-line description** — what this is, in a sentence.
 2. **Architecture diagram** — the system at a glance, rendered inline.
-3. **What questions it answers** — the analytical questions from §6, with
-   dashboard screenshots.
+3. **What questions it answers** — the analytical questions from §6. Carry a
+   real worked result from the built models; add dashboard screenshots when
+   the serving phase produces them. A placeholder image is worse than a
+   table, because it breaks the "every claim is true" rule on sight.
 4. **Tech stack + why** — one line of rationale per component.
-5. **Run it in 3 commands** — setup, ingest, transform.
-6. **Data model** — the star schema, with a link to the published lineage docs.
+5. **Run it** — the shortest sequence that actually works from a fresh
+   clone. **Amended 2026-09-14:** this said "in 3 commands — setup, ingest,
+   transform", which the implementation does not support. A clone also
+   needs `.env` filled in and `python tasks.py migrate` run, so the honest
+   sequence is four commands around one config step. Folding `migrate`
+   into `setup` to hit the number was rejected: applying schema changes as
+   a side effect of installing dependencies hides the one step that
+   touches the database.
+6. **Data model** — the star schema, with the command that generates the
+   lineage docs. A hosted link replaces it if the docs are ever published.
 7. **Engineering notes** — idempotency, retry/dead-letter, testing, CI.
 8. **Attribution** — data source and its terms of use.
 
