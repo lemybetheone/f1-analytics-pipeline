@@ -20,6 +20,13 @@ ignore = [
               # a wash; the tuple form stays.
 ]
 
+[lint.isort]
+# The repo has an `airflow/` directory, which makes isort's first-party
+# detection classify the *Airflow package* as first-party and sort it below
+# genuinely local modules. Saying so explicitly keeps DAG imports in the
+# conventional order.
+known-third-party = ["airflow"]
+
 [lint.per-file-ignores]
 # Phase 0 probes deliberately catch broad exceptions: a discovery run must
 # survive anything the source does and report it, rather than aborting.
