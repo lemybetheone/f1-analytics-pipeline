@@ -342,22 +342,67 @@ models:
           - unique
           - not_null
 
+      - name: status_canonical
+        description: >
+          The era-normalised status name. **Derived, and deliberately not
+          hashed** — `status_key` hashes the raw `status`, because that is what
+          `fct_results` hashes. Hashing this instead would break every fact
+          join silently.
+
+          It exists because the source renamed things: `+N Laps` became a bare
+          `Lapped` in 2023. Grouping the raw text splits one concept in two at
+          the rename, which would show as a discontinuity in any time series
+          that is an artefact of vocabulary rather than of racing. Within-era
+          near-duplicates are folded here too — `Tyre puncture` into
+          `Puncture`, `Driver Seat` into `Seat`, `Injured` into `Injury`,
+          `Excluded` into `Disqualified`.
+
+          **Only true synonyms are aliased.** `Withdrew` gives way to `Did
+          not start` in 2023 and looks like a rename, but 23 of 245
+          `Withdrew` rows completed laps — one of them 74. It shares a
+          category instead, so the canonical name stays truthful. `Eye
+          injury` is treated the same way: a subtype of injury, not another
+          word for it.
+
+          Not unique: that is the point. Several raw statuses share one
+          canonical name.
+        data_tests: [not_null]
+
+      - name: laps_down
+        description: >
+          How many laps behind a lapped car finished, parsed from `+N Laps`.
+
+          **Legitimately null, and null for two different reasons** — the
+          status is not a lapped one, or it is `Lapped` from 2023 onward, when
+          the source stopped saying how far down. That second case is an
+          information loss upstream, recorded here rather than papered over:
+          "how far down do cars finish" is answerable for 1950–2022 and not
+          after.
+
       - name: status_category
         description: >
           **Curated grouping — this is the one place an opinion is encoded as
           data in this warehouse**, so it is worth reading the model header
           before trusting it.
 
-          Every non-mechanical outcome is enumerated and everything else falls
-          through to `mechanical`. Verified against all 136: the 82 that fall
-          through are Engine, Gearbox, Suspension, Transmission, Electrical,
-          Brakes and similar — mechanical without exception.
+          Derived from `status_canonical`, not the raw text, so an era rename
+          cannot split a category. These are **causes**, matching PRD §6 theme
+          6's "most common retirement reasons (engine, collision, gearbox…)".
+          Whether a driver was classified is a different question, answered by
+          `fct_results.is_classified`.
 
-          The risk that creates is that a *new* non-mechanical status added
-          upstream would be filed silently as mechanical. The exception lists
-          in the model are where such an outcome gets added. Defaulting to
-          'unclassified' instead was considered and rejected: it would put
-          6,654 all-time rows into a bucket that answers nothing.
+          Two categories name an absence rather than a cause:
+          `cause_unspecified` (471 rows — 'Retired' and 'Not classified', where
+          the source records the outcome but not the reason) and `other` (5
+          rows of genuine residue, which should stay small; growth means
+          something new arrived upstream).
+
+          Every non-mechanical outcome is enumerated and everything else falls
+          through to `mechanical`. The risk that creates is that a *new*
+          non-mechanical status is filed silently as mechanical. Enumerating
+          the 82 mechanical values instead would put a new *mechanical* status
+          in `other` — the same failure pointed the other way, against a list
+          four times longer to maintain.
         data_tests:
           - not_null
           # Safe to enumerate, unlike `status` itself: this vocabulary is ours,
@@ -370,7 +415,10 @@ models:
                   - mechanical
                   - collision
                   - disqualified
-                  - non_start_or_other
+                  - withdrawn_or_dns
+                  - driver_unavailable
+                  - cause_unspecified
+                  - other
                   - unknown
 
       - name: status_implies_running_at_end

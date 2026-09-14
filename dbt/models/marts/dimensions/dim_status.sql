@@ -11,21 +11,68 @@
 -- *description* and no statusId at all, so the text is the real join key. The
 -- text is unique across all 136 rows and every loaded result matches one.
 --
+-- **The source renamed things over time, so aliasing happens before grouping.**
+-- The full-history backfill made this visible: the same concept appears under
+-- different names in different eras, and grouping the raw text would split one
+-- concept in two at the rename.
+--
+--     +1 Lap ... +46 Laps   1950-2022  ->  Lapped          2023-2026
+--     Withdrew              1950-2023  ->  Did not start   2023-2026
+--
+-- Left alone, "has the DNS rate changed?" shows a discontinuity at 2023 that is
+-- an artefact of vocabulary, not of racing. There are near-duplicates within an
+-- era too — Puncture/Tyre puncture, Seat/Driver Seat, Injury/Injured — which
+-- split the same cause across two rows and, before this, across two categories.
+--
+-- **Alias only true synonyms; co-categorise everything else.** The rule is
+-- worth stating because the tempting version is wrong. `Withdrew` gives way to
+-- `Did not start` in 2023, which looks like a rename — but 23 of 245 `Withdrew`
+-- rows completed laps, one of them 74 (1996). The source used the word loosely
+-- for an entry pulled *after* running, so aliasing would make
+-- `status_canonical` assert "did not start" about a car that ran most of a
+-- race. `Eye injury` is the same shape: a *subtype* of injury rather than
+-- another word for it, and folding it in discards the only detail the source
+-- gave. Both share a category instead, which closes the 2023 discontinuity
+-- where it actually mattered while leaving the canonical name truthful.
+--
+-- **Aliasing is an attribute, never a change to the grain or the key.** The
+-- grain stays one row per raw status text and `status_key` still hashes
+-- `status`, because that is what `fct_results` hashes when it builds its own
+-- `status_key`. Collapsing the rows, or hashing the canonical name, would
+-- silently break every fact join. `status_canonical` sits alongside the raw
+-- text; the category is derived from the canonical name.
+--
+-- Renaming also **destroys information**: '+N Laps' says how far down a car
+-- finished and 'Lapped' does not. `laps_down` preserves it where the source
+-- still carried it — populated 1950-2022, null from 2023. That is a real gap in
+-- the source, recorded rather than papered over.
+--
 -- **The category grouping is curated — it is my judgement, not the source's.**
 -- That deserves stating plainly, because it is the one place in this warehouse
--- where an opinion is encoded as data. The rule enumerates every non-mechanical
--- outcome and lets everything else fall through to `mechanical`. Checked
--- against all 136: the 82 that fall through are Engine, Gearbox, Suspension,
--- Transmission, Electrical, Brakes, Clutch, Turbo, Hydraulics, Overheating and
--- similar — mechanical without exception.
+-- where an opinion is encoded as data. PRD §6 theme 6 asks for "most common
+-- retirement reasons (engine, collision, gearbox, ...)", so these are **causes**
+-- rather than outcomes. Whether a driver was classified is a different question
+-- and is answered by `fct_results.is_classified`, never from here.
 --
--- **The risk that creates:** a *new* non-mechanical status added upstream would
--- be silently filed as mechanical. The alternative — defaulting to
--- 'unclassified' — puts 6,654 all-time rows into a bucket that means nothing
--- and answers no question, which is worse. The exception lists below are where
--- a new outcome gets added. A seed file was considered and rejected for the
--- same reason: 136 hand-maintained rows would leave a new status with no row
--- at all, which is a null join rather than a wrong label.
+-- Two categories name an absence rather than a cause, deliberately:
+--
+-- * `cause_unspecified` (471 rows) — 'Retired' and 'Not classified'. The source
+--   records that the car stopped, or covered too little distance, without
+--   saying why. Burying 471 rows in `other` would make the headline answer to
+--   "most common retirement reason" a bucket that means nothing. Naming the
+--   ignorance is more honest than hiding it, and it is the largest non-engine
+--   entry, so it would mislead at the top of the list.
+--
+-- * `other` (5 rows) — genuine residue. A residue bucket should be small; if it
+--   grows, something new arrived upstream and wants a decision.
+--
+-- **Mechanical remains the fall-through, and the risk is unchanged:** a new
+-- non-mechanical status added upstream is silently filed as mechanical.
+-- Enumerating all 82 mechanical values instead would mean a new *mechanical*
+-- status falling into `other`, which is the same failure pointed the other way,
+-- against a list four times longer to maintain. The exception lists below are
+-- where a new outcome gets added, and `accepted_values` on `status_category`
+-- locks the vocabulary so a typo cannot invent a category.
 
 with statuses as (
 
@@ -33,38 +80,97 @@ with statuses as (
 
 ),
 
+aliased as (
+
+    select
+        status_id,
+        status,
+
+        -- The era-normalised name. Derived, never hashed — see the header.
+        case
+            -- Matched rather than listed: the set grows with race distance, so
+            -- '+12 Laps' should not need a code change.
+            when status ~ '^\+[0-9]+ Lap' then 'Lapped'
+
+            when status = 'Excluded'      then 'Disqualified'
+            when status = 'Injured'       then 'Injury'
+            when status = 'Driver unwell' then 'Illness'
+            when status = 'Tyre puncture' then 'Puncture'
+            when status = 'Driver Seat'   then 'Seat'
+            else status
+        end as status_canonical,
+
+        -- How many laps down, where the source still said so. Null from 2023,
+        -- when '+N Laps' became a bare 'Lapped' — an information loss upstream,
+        -- not a modelling choice.
+        case
+            when status ~ '^\+[0-9]+ Lap'
+            then (regexp_match(status, '^\+([0-9]+) Lap'))[1]::int
+        end as laps_down,
+
+        source_all_time_count
+
+    from statuses
+
+),
+
 categorised as (
 
     select
-        -- Hashed from the text, because that is what facts join on.
+        -- Hashed from the RAW text, because that is what facts join on.
+        -- Hashing `status_canonical` would break every fact join silently.
         {{ dbt_utils.generate_surrogate_key(['status']) }} as status_key,
 
         status_id,
         status,
+        status_canonical,
+        laps_down,
 
         case
-            when status = 'Finished' then 'finished'
+            when status_canonical = 'Finished' then 'finished'
+            when status_canonical = 'Lapped'   then 'lapped'
 
-            -- 31 statuses follow the '+N Lap(s)' pattern, plus 'Lapped'
-            -- itself. Matched rather than listed: the set grows with race
-            -- distance, and '+12 Laps' should not need a code change.
-            when status ~ '^\+[0-9]+ Lap' then 'lapped'
-            when status = 'Lapped' then 'lapped'
-
-            when status in (
+            when status_canonical in (
                 'Accident', 'Collision', 'Spun off', 'Collision damage',
-                'Puncture', 'Damage'
+                'Puncture', 'Damage', 'Fatal accident'
             ) then 'collision'
 
-            when status = 'Disqualified' then 'disqualified'
+            -- 'Underweight' is a technical infringement, not a car failure:
+            -- the car finished and was struck from the results.
+            when status_canonical in ('Disqualified', 'Underweight')
+                then 'disqualified'
 
-            when status in (
+            -- Co-categorised rather than aliased, and the distinction matters.
+            -- The 2023 rename is real, but 'Withdrew' and 'Did not start' are
+            -- not synonyms: 23 of 245 'Withdrew' rows completed laps, one of
+            -- them 74 (1996). The source used the word loosely for an entry
+            -- pulled *after* running. Aliasing would make `status_canonical`
+            -- assert "did not start" about a car that ran most of a race.
+            -- Sharing a category still closes the 2023 discontinuity, which is
+            -- where the break actually mattered.
+            when status_canonical in (
                 'Withdrew', 'Did not start', 'Did not qualify',
-                'Did not prequalify', 'Not classified', 'Retired',
-                'Injured', 'Injury', 'Illness', 'Driver Seat',
-                'Safety concerns', 'Eligibility', 'Excluded',
-                'Debris', 'Safety', 'Fatal accident', 'Driver unwell'
-            ) then 'non_start_or_other'
+                'Did not prequalify'
+            ) then 'withdrawn_or_dns'
+
+            -- The driver, not the car. Previously split across two categories:
+            -- 'Physical' and 'Eye injury' sat in mechanical while 'Injury' and
+            -- 'Illness' sat in the catch-all.
+            --
+            -- 'Eye injury' is co-categorised rather than aliased for the same
+            -- reason as above: it is a *subtype* of injury, not another word
+            -- for it, and folding it in would discard the only detail the
+            -- source gave.
+            when status_canonical in ('Injury', 'Eye injury', 'Illness', 'Physical')
+                then 'driver_unavailable'
+
+            -- The source records the outcome but not the reason. See header.
+            when status_canonical in ('Retired', 'Not classified')
+                then 'cause_unspecified'
+
+            when status_canonical in ('Debris', 'Safety', 'Safety concerns',
+                                      'Eligibility')
+                then 'other'
 
             -- Everything remaining is a mechanical failure. See the header for
             -- why this is a default rather than an enumeration.
@@ -72,12 +178,10 @@ categorised as (
         end as status_category,
 
         -- Carried through from staging. Not a metric — it is the API's
-        -- all-time occurrence count for the scope we queried, and it will
-        -- disagree with anything counted from the facts until the historical
-        -- backfill completes. Kept as the input to that reconciliation.
+        -- all-time occurrence count for the scope we queried.
         source_all_time_count
 
-    from statuses
+    from aliased
 
 ),
 
@@ -87,6 +191,8 @@ known as (
         status_key,
         status_id,
         status,
+        status_canonical,
+        laps_down,
         status_category,
 
         -- **Describes the status, not the driver's classification.** Those are
@@ -123,8 +229,14 @@ unknown_member as (
         -- the cast has to match the column's actual type.
         -1::int                    as status_id,
         'Unknown status'::text     as status,
+        'Unknown status'::text     as status_canonical,
+        null::int                  as laps_down,
         'unknown'::text            as status_category,
-        null::boolean              as is_classified_finish,
+
+        -- Named to match the `known` branch. A UNION takes its column names
+        -- from the first branch, so a stale name here was harmless and
+        -- misleading — the worst combination to leave in a portfolio repo.
+        null::boolean              as status_implies_running_at_end,
         null::int                  as source_all_time_count,
         true                       as is_unknown
 
