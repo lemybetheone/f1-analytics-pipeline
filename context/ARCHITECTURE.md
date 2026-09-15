@@ -380,6 +380,29 @@ Runs on every pull request; **must be green to merge**.
   warehouse, or spin up a throwaway Postgres service container in the workflow.
   If neither is available, fall back to `dbt parse` / `dbt compile` so at least
   references and syntax are validated.
+
+**As implemented, 2026-09-15** — the table above is the target; this is what
+`.github/workflows/ci.yml` actually runs, and the gap is stated rather than left
+for a reader to discover:
+
+| Stage | Status |
+|---|---|
+| `ruff check .` | ✅ |
+| `pytest -q` | ✅ |
+| `dbt deps` + `dbt parse` | ✅ the documented fallback — CI holds no warehouse credentials, so `build` is not available |
+| `dbt build` | ❌ needs a database; deliberately out |
+| sqlfluff | ❌ promised for Phase 2, never adopted |
+| `dbt docs generate` | ❌ not wired up |
+
+**"Must be green to merge" is also aspirational.** Branch protection requires a
+paid plan for private repositories, so CI here is *advisory* — two pull requests
+merged red before that was noticed. The committed `hooks/pre-push` runs the same
+checks earlier as partial compensation; it is not equivalent, since `--no-verify`
+bypasses it. This becomes a real gate when the repository goes public.
+
+The dbt step arrived on 2026-09-15, three days after Phase 2 finished. In the
+interim a broken `ref()` would have passed CI — and `tasks.py` carried a comment
+claiming CI already ran it.
 - CI must read credentials from repository secrets — never from committed files.
 - Keep CI fast enough that it is not routinely bypassed; a slow pipeline is a
   disabled pipeline.

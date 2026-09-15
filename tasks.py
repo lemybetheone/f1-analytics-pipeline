@@ -284,8 +284,14 @@ def task_transform(args) -> None:
     run([dbt, "deps"], why="install dbt packages", env=env, cwd=DBT_DIR)
 
     if args.parse_only:
-        # No database needed — validates refs, sources and Jinja only. This is
-        # what CI runs, since CI has no warehouse credentials.
+        # No database needed — validates refs, sources and Jinja only. CI runs
+        # the same *check*, but not through here: this function requires a
+        # `.venv`, and CI installs into the system Python. It therefore calls
+        # `dbt deps && dbt parse` directly, with placeholder warehouse values,
+        # since `env_var()` in profiles.yml has no defaults.
+        #
+        # This claimed "this is what CI runs" from Phase 2 until 2026-09-15,
+        # during which CI ran no dbt step at all.
         run([dbt, "parse"], why="validate the project without a database",
             env=env, cwd=DBT_DIR)
         return
