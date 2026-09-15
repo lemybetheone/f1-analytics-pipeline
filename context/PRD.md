@@ -248,9 +248,86 @@ division on the measured totals.
 
 ## 8b. Dashboard specification
 
-> `TODO (Phase 0/1):` define one visual per §6 question once the models exist.
-> Every visual reads from `marts` only; entities display as **names**, not ids;
-> screenshots embedded in the README.
+_Written 2026-09-15, once the models existed. §10 requires **≥3 of the §6
+themes answered visually**; this specifies four._
+
+**Tool: Metabase, self-hosted in Docker. Screenshots in the README, not a
+hosted link.** Decided 2026-09-15 after evaluating Evidence.dev, Streamlit and
+Looker Studio. Reasoning, since the obvious choice would have been a shareable
+URL:
+
+- **A link nobody maintains is worse than a screenshot.** A dead dashboard URL
+  in a README reads as abandoned work; a screenshot stays true indefinitely and
+  needs nothing. The author's own assessment was that the link would not be
+  maintained past six months, and designing around that is more honest than
+  designing around good intentions.
+- **Free hosting for Metabase does not really exist.** It is a stateful JVM
+  application needing ~2 GB and an always-on process — Vercel and Netlify cannot
+  run it at all, Render's free tier is too small, Railway's is gone, and
+  Metabase Cloud is ~$85/month. The only free routes are a self-managed VM (an
+  ops project) or nothing.
+- **A static alternative was the real contender.** Evidence.dev builds to a
+  static site, hosts free, cannot rot and exposes no database — but it adds a
+  Node toolchain to a Python repository that CI cannot lint or test, and its
+  queries are invisible to every existing check.
+- **Screenshots reach everyone.** Every reader of the README sees them; a link
+  is opened by a minority. The dashboard is not this project's differentiator —
+  the decision log, the reconciliation test and the backfill findings are.
+
+The cost accepted: reviewers cannot interact with it, and it is demonstrated
+live in interviews instead.
+
+**Connection.** Metabase connects as **`f1_reporting`** (migration 007) — a
+read-only role with `select` on `marts` and nothing else. Never as
+`f1_pipeline`, which owns those tables and could drop them. Metabase stores that
+credential in its own application database, which is a further reason the
+credential should be able to do nothing but read.
+
+### Rules
+
+- **Every visual reads from `marts` only.** No `raw`, no `staging` — the
+  reporting role cannot reach them, which enforces this rather than trusting it.
+- **Entities display as names, not ids.** `dim_driver.full_name`,
+  `dim_constructor.constructor_name`, `dim_race.race_name`.
+- **Never `classified_position` for "did they finish".** Use
+  `fct_results.is_classified`; the two disagree, and the fact's flag reads the
+  stewards' marker. Likewise never `dim_status.status_implies_running_at_end`
+  for DNF rate — it answers a different question (ARCHITECTURE decision 39's
+  neighbour; see `_facts.yml`).
+- **Never sum `fct_driver_standings.points` across rounds.** It is a periodic
+  snapshot carrying a running total; summing counts every point once per
+  subsequent round. Difference consecutive snapshots, or use `fct_results`.
+- **Screenshots embedded in the README**, replacing the "screenshots land with
+  the serving phase" note in §9a.3.
+- **State the denominator on any rate.** DNF rate is computed **per start, not
+  per entry** — a car that never started did not fail to finish, so
+  `withdrawn_or_dns` rows leave both halves of the fraction. Measured, the two
+  definitions differ by 0.1–3.4 points across the eras, widest in the 1960s
+  (48.3% per entry against 44.9% per start). A rate with an unstated denominator
+  is one two readers can interpret differently.
+
+_Visual 2's source was specified as `fct_results` × `dim_race` and corrected on
+building it: `season` is denormalised onto the fact (ARCHITECTURE decision 27),
+so no race join is needed to slice by era — that decision paying off. `dim_status`
+is joined instead, to exclude non-starters._
+
+### The visuals
+
+| # | Visual | §6 theme | Reads | Shape |
+|---|---|---|---|---|
+| 1 | **Championship progression** — points by round for the top contenders of a season | 1 | `fct_driver_standings` × `dim_driver` × `dim_race` | Line, one series per driver, x = `round` |
+| 2 | **Reliability by era** — DNF rate per decade across 77 seasons | 6 | `fct_results` × `dim_status` | Bar, x = decade, y = share where `not is_classified` |
+| 3 | **Why cars retire** — retirement causes, grouped | 6 | `fct_results` × `dim_status` | Bar, `status_category` over non-finishers |
+| 4 | **Grid vs finish** — drivers who gain the most places | 3 | `fct_results` × `dim_driver` | Bar, mean `positions_gained`, minimum start count |
+
+Four rather than three so no single fact carries the dashboard: 1 uses the
+snapshot fact, 2–3 the transaction fact with and without a dimension join, 4 a
+derived measure. Together they demonstrate the star schema being used as
+designed rather than one wide table being queried four ways.
+
+**Visual 2 is the headline.** 50.1% DNF in the 1950s falling to 13.0% in the
+2020s is the clearest evidence the 77-season backfill bought something a
+three-season sample could not — and it is the one a reader will remember.
 
 ## 9. Phases & timeline
 
