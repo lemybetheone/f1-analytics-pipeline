@@ -9,26 +9,48 @@
 
 ```mermaid
 flowchart LR
-    A[F1 API — confirm in Phase 0] -->|extract| B[Python ingestion]
-    B -->|land raw JSON| C[(S3 data lake<br/>partitioned by date)]
-    C -->|load from lake| D[(PostgreSQL / Supabase<br/>raw schema)]
-    D -->|dbt| E[staging views]
-    E -->|dbt| F[marts: dim + fct]
-    F -->|dbt| G[aggregates / marts]
-    G --> H[BI dashboard]
-    I[Airflow DAG] -.orchestrates.-> B
-    I -.orchestrates.-> E
-    B -->|failures| J[(dead-letter table)]
+    A[Jolpica-F1 REST API<br/>500 req/hour] -->|extract · retry · paginate| B[Python ingestion]
+    B -->|land raw JSON| C[(S3 data lake<br/>partitioned by ingestion date)]
+    C -->|load from the lake| D[(PostgreSQL / Supabase<br/>raw schema)]
+    D -->|dbt| E[staging<br/>12 views]
+    E -->|dbt| F[marts<br/>5 dimensions · 4 facts]
+    F -->|select, as f1_reporting| H[Metabase<br/>screenshots in the README]
+    B -->|failed records| J[(dead-letter table)]
+    B <-->|shared rate budget| K[(api_call_log)]
+    I[Airflow] -->|orchestrates| B
+    I -->|orchestrates| F
 ```
+
+**Three transformation layers, not four.** An earlier version of this diagram
+showed an `aggregates / marts` layer between the star schema and the dashboard,
+which SCHEMA §1 never specified and which does not exist — Metabase queries
+`marts` directly. Corrected 2026-09-15 rather than left to mislead; the
+implementation matching this diagram is a stated non-negotiable.
+
+That is a deliberate omission, not an oversight. `fct_results` is 26k rows and
+every dashboard query returns in milliseconds, so pre-aggregation would solve a
+problem this project does not have, and each `rpt_` model would be another thing
+to build, test and keep in sync. The project's own precedent is the SCD Type 2
+reversal (decision 18): do not build structure the data does not call for.
+
+**The cost accepted, stated plainly:** metric definitions now live in
+`metabase/queries/*.sql`, which dbt neither tests nor enforces. The decision that
+DNF rate is computed *per start* is documented there and nowhere a build could
+check it, so a fifth chart could compute it *per entry* and nothing would catch
+the contradiction.
+
+**The trigger for building the layer** is therefore duplication, not volume: the
+moment a metric is needed by a second chart, it becomes a dbt model with a tested
+grain rather than a definition copied between two SQL files.
 
 | Layer | Technology | Responsibility |
 |---|---|---|
-| Source | F1 REST API _(confirm in Phase 0)_ | System of record (external) |
+| Source | Jolpica-F1 REST API | System of record (external); 500 req/hour, no rate-limit headers |
 | Ingestion | Python + requests | Extract, retry, paginate |
 | Lake | AWS S3 | Immutable raw landing zone, replay source |
 | Warehouse | PostgreSQL (Supabase) | Structured storage & compute |
 | Transformation | dbt Core | Staging → dimensional model, tests, docs |
-| Orchestration | Airflow (Docker) | Scheduling, dependencies, alerting |
+| Orchestration | Airflow 3.0.2 (Docker) | Scheduling, dependencies, retries, failure reporting |
 | Serving | Metabase (Docker, local) | Dashboards; screenshots in the README — see PRD §8b |
 | CI | GitHub Actions | Run tests on PR |
 
