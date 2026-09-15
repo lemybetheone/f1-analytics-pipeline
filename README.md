@@ -64,15 +64,20 @@ of answer only the full backfill makes possible:
 
 | decade | starts | DNFs | DNF rate |
 |---|---|---|---|
-| 1950s | 1,873 | 939 | 50.1% |
-| 1970s | 3,476 | 1,603 | 46.1% |
-| 1980s | 3,958 | 2,090 | **52.8%** |
-| 2000s | 3,639 | 1,098 | 30.2% |
-| 2010s | 4,293 | 764 | 17.8% |
-| 2020s | 2,904 | 377 | 13.0% |
+| 1950s | 1,847 | 913 | 49.4% |
+| 1970s | 3,440 | 1,567 | 45.6% |
+| 1980s | 3,938 | 2,070 | **52.6%** |
+| 2000s | 3,624 | 1,083 | 29.9% |
+| 2010s | 4,283 | 755 | 17.6% |
+| 2020s | 2,906 | 362 | 12.5% |
 
 Half the field failing to finish in the fifties, down to 13% today — with the
 1980s bump where the turbo era belongs.
+
+Rate is **per start, not per entry**: a car that never started did not fail to
+finish, so non-starters leave both halves of the fraction. The two definitions
+differ by up to 3.4 points — widest in the 1960s, 48.3% against 44.9% — which is
+why the denominator is stated rather than assumed.
 
 > Dashboard screenshots land with the serving phase. Every figure on this page
 > comes from the committed models and can be reproduced by running them.
@@ -247,8 +252,8 @@ kind of work:
 - **Code** (`ingestion/`, `dbt/`, `discovery/`, `migrations/`, `tests/`) is the
   author's own and is not an adaptation of the data.
 - **Data and data derivatives** — the star schema, any committed extract or
-  sample payload, and published figures — are adaptations and inherit
-  **CC BY-NC-SA 4.0**, attributed to Jolpica-F1.
+  sample payload, **dashboard screenshots**, and published figures — are
+  adaptations and inherit **CC BY-NC-SA 4.0**, attributed to Jolpica-F1.
 
 No bulk raw data is committed to this repository. Landing raw JSON in a private
 object store is storage; redistributing it would not be.

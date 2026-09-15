@@ -1,0 +1,72 @@
+# Metabase, self-hosted. PRD §8b.
+#
+# Its own compose file rather than a service in `airflow/`, because the two have
+# different lifecycles: Airflow runs on a schedule and should stay up, Metabase
+# is opened when someone wants to look at something. Sharing a file would mean
+# stopping one to restart the other.
+#
+# WHAT IT CONNECTS TO
+# -------------------
+# Nothing here knows about the warehouse. The connection is configured once
+# inside Metabase's UI, using `f1_reporting` (migration 007) — a read-only role
+# with `select` on `marts` and nothing else. Never `f1_pipeline`, which owns
+# those tables: Metabase stores the credential in its own application database,
+# so it should be one that can do nothing but read.
+#
+# THE VOLUME IS THE POINT
+# -----------------------
+# Metabase keeps every saved question, dashboard and setting in an application
+# database of its own — **not** in the warehouse. The default is an embedded H2
+# file *inside the container*, so without the named volume below, `docker
+# compose down` deletes every dashboard ever built here. That is the actual
+# "will this still work next year" risk, and it has nothing to do with
+# licensing.
+#
+# H2 rather than a dedicated Postgres container: Metabase recommends Postgres
+# for production, and this is a single user on one laptop opening it
+# occasionally. A second container to hold a few dozen rows would be structure
+# for its own sake. If this ever became multi-user or hosted, that changes.
+#
+# BACKUP
+# ------
+# The volume is not in git and not in the lake. If the dashboards ever become
+# expensive to rebuild:
+#
+#     docker run --rm -v metabase_data:/from -v "%cd%":/to alpine \
+#         tar czf /to/metabase-backup.tgz -C /from .
+
+services:
+  metabase:
+    # Pinned, not `latest`: a version that changes under you is a dashboard that
+    # breaks for reasons unrelated to anything you did. `v0.x` is the
+    # open-source edition — `v1.x` tags are the commercial build.
+    image: metabase/metabase:v0.63.17
+    container_name: metabase
+    ports:
+      # localhost only. This has no authentication beyond Metabase's own login
+      # and holds a live warehouse credential, so it must not listen on 0.0.0.0.
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - metabase_data:/metabase.db
+    environment:
+      MB_DB_TYPE: h2
+      MB_DB_FILE: /metabase.db/metabase.db
+
+      # Off. It reports usage back to Metabase, and this is a personal project
+      # whose query patterns are nobody else's business.
+      MB_ANON_TRACKING_ENABLED: "false"
+
+      # The container is UTC; the warehouse stores UTC (a project
+      # non-negotiable). Stating it stops Metabase inferring something else and
+      # silently shifting race dates by a day.
+      JAVA_TIMEZONE: UTC
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "-I", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+
+volumes:
+  metabase_data:
