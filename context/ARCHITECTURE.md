@@ -187,6 +187,7 @@ vanish silently.
 | 37 | **The DAG owns step ordering, not `tasks.py ingest`** | Have one Airflow task shell out to `tasks.py ingest`, which already runs the steps in order | `task_ingest` runs reference data, then season entities, then race entities in a Python loop — that ordering is real (race-scoped entities read their rounds from `raw.races`, so running them first silently does nothing) but it is *orchestration*, which is now Airflow's job. As separate tasks each step gets its own retries, its own log and a visible place in the graph; one opaque call would waste most of what the orchestrator is for. Forced by a practical constraint too: `tasks.py` hardcodes `VENV = REPO_ROOT / ".venv"` and exits if it is missing, and in the container that path is the host's **Windows** venv. The DAG calls `python -m ingestion.pipeline` directly instead. **`--resume` is deliberately absent** — right for the backfill, wrong for a scheduled refresh, which exists precisely to re-fetch results amended after stewards' decisions |
 | 38 | **The DAG is scheduled daily, and the season comes from the clock rather than from `logical_date`** | Derive the season from `{{ logical_date.year }}`; keep it a hardcoded constant; schedule weekly | This job refreshes *current state* — the source has no time-window query, so asking for 2026 returns every 2026 result, always. There is no daily slice to fetch, so a run does not represent a period, and keying the season off the run's date would borrow a semantic the job does not have. `$(date -u +%Y)` in the shell says exactly what is meant. **Airflow 3 independently agrees**: verified in the running container that `schedule="@daily"` resolves to `CronTriggerTimetable` — *fire at 00:00* — with a **zero-width data interval**, not Airflow 2's `CronDataIntervalTimetable` where a run represented the window before it. `logical_date`, `data_interval_start` and `data_interval_end` are also all **nullable** in Airflow 3, so templating on them would break on an asset-triggered or manual run. Daily rather than weekly because results are adjudicated — stewards can change a classification days later and a weekly run would miss amendments, at ~80 calls a day against a 500/hour budget. `catchup=False` because fourteen missed triggers would fetch the identical thing fourteen times; `max_active_runs=1` because two concurrent runs would compete for the same budget and interleave writes to one lake partition |
 | 39 | **Failure alerting is an `on_failure_callback` emitting a structured log record, built from the task instance rather than the context** | Read `exception`/`reason`/`try_number` from the callback context, as the type hints suggest; wire SMTP email or a Slack webhook now | The callback fires **once, after the final attempt** — not per retry, since a task in `up_for_retry` has not failed yet and alerting on every attempt is how a channel becomes noise people ignore. Verified: a `retries=2` task writes the record in attempt 3's log and in neither of the first two. **The callback context is not the template context.** Airflow's `Context` type lists `exception`, `reason`, `try_number`, `logical_date` and the `ds`/`ts` macros; **none are populated for a task callback in 3.0.2**, so the first version printed `None` for all three — an alert saying a failure happened without saying anything about it, which reads as working. Measured by dumping the live context from inside a failing task. Everything now comes off the task instance, and the exception is deliberately absent because Airflow logs the traceback to the same file immediately above, which is why the alert carries the **log path**. Same trap in the enum: `ti.state` is the SDK's `TaskInstanceState`, a plain Enum, while the same-named enum in `airflow.utils.state` overrides `__str__` — testing the wrong one reports the code is fine when it is not, so `.value` is taken explicitly. Transport is a log record because this Airflow runs on one machine and the UI is the alert channel; email or Slack replaces the function body and nothing else |
+| 40 | **The dashboard connects as a separate read-only role, and the grant is made durable with default privileges** | Reuse `f1_pipeline`; grant `select` on today's tables and stop there | `f1_pipeline` **owns** raw, staging and marts, so a BI tool holding that credential could drop the tables it draws from — a large blast radius for something whose only verb is `select`. `f1_reporting` gets `select` on `marts` and nothing else; reporting reads the modelled layer, and a question `marts` cannot answer is a new model rather than a wider grant. **The non-obvious half is section 4 of the migration.** `grant select on all tables` covers the tables that exist at that moment, and every `dbt build` drops and recreates each mart — a recreated table is a new object inheriting none of yesterday's grants. Without `alter default privileges for role f1_pipeline`, the dashboard would work on the day it was set up and lose access on the next scheduled DAG run, with nothing to point at. Verified by connecting as the role: 11/11 — reads `marts`, refused on `raw`, `staging`, insert, update, delete, create and drop. Testing only what a least-privilege role *can* do is not testing it |
 
 > Rows 1–7 are stack/pattern choices that carry over from the previous project
 > and are independent of the data source. **F1-specific decisions — source
@@ -380,6 +381,29 @@ Runs on every pull request; **must be green to merge**.
   warehouse, or spin up a throwaway Postgres service container in the workflow.
   If neither is available, fall back to `dbt parse` / `dbt compile` so at least
   references and syntax are validated.
+
+**As implemented, 2026-09-15** — the table above is the target; this is what
+`.github/workflows/ci.yml` actually runs, and the gap is stated rather than left
+for a reader to discover:
+
+| Stage | Status |
+|---|---|
+| `ruff check .` | ✅ |
+| `pytest -q` | ✅ |
+| `dbt deps` + `dbt parse` | ✅ the documented fallback — CI holds no warehouse credentials, so `build` is not available |
+| `dbt build` | ❌ needs a database; deliberately out |
+| sqlfluff | ❌ promised for Phase 2, never adopted |
+| `dbt docs generate` | ❌ not wired up |
+
+**"Must be green to merge" is also aspirational.** Branch protection requires a
+paid plan for private repositories, so CI here is *advisory* — two pull requests
+merged red before that was noticed. The committed `hooks/pre-push` runs the same
+checks earlier as partial compensation; it is not equivalent, since `--no-verify`
+bypasses it. This becomes a real gate when the repository goes public.
+
+The dbt step arrived on 2026-09-15, three days after Phase 2 finished. In the
+interim a broken `ref()` would have passed CI — and `tasks.py` carried a comment
+claiming CI already ran it.
 - CI must read credentials from repository secrets — never from committed files.
 - Keep CI fast enough that it is not routinely bypassed; a slow pipeline is a
   disabled pipeline.

@@ -5,14 +5,23 @@
 # fails, which is a gate no amount of care replaces at 1am. That is why this
 # workflow was pulled forward from Phase 4 (see PRD § Change control).
 #
-# Deliberately excluded for now: dbt build (no models exist yet) and sqlfluff
-# (no SQL yet). Both arrive with Phase 2 — ARCHITECTURE §13 describes the full
-# pipeline. A check that lints nothing is worse than no check: it goes green
-# regardless and trains you to trust it.
+# `dbt parse` was promised here "with Phase 2" and did not arrive until
+# 2026-09-15, three days after Phase 2 finished — so a broken `ref()` or a
+# malformed schema file would have passed CI in the meantime. It is here now.
 #
-# No network access, no credentials. These tests must never reach the source
-# API or a real database — network-dependent CI is flaky CI, and flaky CI is
-# ignored CI.
+# **`dbt build` stays excluded**, and not by oversight: building requires a real
+# warehouse connection, and this workflow holds no credentials. `parse` is the
+# half that can be checked without one — it resolves every `ref()`, `source()`
+# and macro, and compiles the Jinja. Verified to have teeth: a deliberately
+# broken `ref()` exits 2.
+#
+# sqlfluff was also promised for Phase 2 and has not been adopted. Stated rather
+# than quietly dropped.
+#
+# No credentials, and no connection to the source API or the warehouse —
+# network-dependent CI is flaky CI, and flaky CI is ignored CI. `pip install`
+# and `dbt deps` do reach their package registries, which is a different thing
+# from reaching the systems under test.
 
 name: CI
 
@@ -46,3 +55,28 @@ jobs:
 
       - name: Unit tests
         run: pytest -q
+
+      - name: Validate the dbt project
+        working-directory: dbt
+        env:
+          # profiles.yml is committed beside the project rather than in ~/.dbt
+          # (ARCHITECTURE §10), so dbt has to be told where to look.
+          DBT_PROFILES_DIR: .
+
+          # Placeholders, and they never connect to anything. `dbt parse` does
+          # not open a connection, but it does *render* profiles.yml — and
+          # `env_var()` there has no defaults, so without these the step fails
+          # with "Env var required but not provided: 'WAREHOUSE_HOST'".
+          #
+          # Measured, because the obvious test lies: running `dbt parse` in a
+          # working tree that already has a `target/` directory succeeds without
+          # any of these, since dbt reuses the cached manifest. Only a clean
+          # checkout — which is what CI is — shows the real requirement.
+          WAREHOUSE_HOST: parse-only-no-connection
+          WAREHOUSE_PORT: "5432"
+          WAREHOUSE_USER: parse-only
+          WAREHOUSE_PASSWORD: parse-only
+          WAREHOUSE_DATABASE: postgres
+        run: |
+          dbt deps
+          dbt parse

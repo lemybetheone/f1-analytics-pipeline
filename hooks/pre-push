@@ -44,4 +44,22 @@ echo "pre-push: ruff"
 echo "pre-push: pytest"
 "$BIN/pytest" -q
 
+# The dbt check is the one place this hook cannot mirror CI's invocation.
+# CI installs into the system Python and calls `dbt deps && dbt parse` directly
+# with placeholder warehouse values; `tasks.py` requires a `.venv` and would
+# fail there. Here it is the better route, because it bridges `.env` into the
+# process environment through the project's single config path rather than
+# teaching this shell script to parse `.env` as well.
+#
+# Same check, different plumbing — stated because the note above insists the
+# hook exercise exactly what CI does, and this is the documented exception.
+if [ -f ".env" ]; then
+    echo "pre-push: dbt parse"
+    "$BIN/python" tasks.py transform --parse-only
+else
+    echo "pre-push: no .env found — skipping dbt parse."
+    echo "          profiles.yml resolves credentials through env_var() with no"
+    echo "          defaults, so parse cannot render the profile without one."
+fi
+
 echo "pre-push: ok"
