@@ -319,11 +319,63 @@ is joined instead, to exclude non-starters._
 | 2 | **Reliability by era** — DNF rate per decade across 77 seasons | 6 | `fct_results` × `dim_status` | Bar, x = decade, y = share where `not is_classified` |
 | 3 | **Why cars retire** — retirement causes, grouped | 6 | `fct_results` × `dim_status` | Bar, `status_category` over non-finishers |
 | 4 | **Grid vs finish** — drivers who gain the most places | 3 | `fct_results` × `dim_driver` | Bar, mean `positions_gained`, minimum start count |
+| 5 | **Data freshness** — how current the warehouse is | — | `rpt_pipeline_freshness` | Table / number cards |
+| 6 | **Driver standings** — the championship as it stands | 1 | `fct_driver_standings` × `dim_driver` × `dim_constructor` | Table, latest round |
+| 7 | **Constructor standings** — the same for teams | 1 | `fct_constructor_standings` × `dim_constructor` | Bar, latest round |
+| 8 | **Calendar growth** — races per season, 1950–2026 | 5 | `dim_race` | Line, scheduled vs run |
+| 9 | **Circuit map** — 78 circuits in 34 countries | 5 | `dim_circuit` × `dim_race` | Map, sized by races held |
+| 10 | **Teammate head-to-head** — who beat their teammate | 4 | `fct_results` self-joined × `dim_driver` × `dim_constructor` | Bar, two series per pairing |
 
-Four rather than three so no single fact carries the dashboard: 1 uses the
-snapshot fact, 2–3 the transaction fact with and without a dimension join, 4 a
-derived measure. Together they demonstrate the star schema being used as
-designed rather than one wide table being queried four ways.
+### Two tabs, not one dashboard
+
+**`Current season`** — visuals 5, 6, 7 and 1 (with `season` defaulted to the
+current year). **`All time`** — visuals 2, 3, 4, 8 and 9.
+
+One dashboard serving both purposes serves neither: a reviewer wants the
+77-season sweep, someone checking the championship wants last weekend. Splitting
+them keeps one link while letting each tab answer one question.
+
+### The reporting layer starts here, for a reason
+
+ARCHITECTURE §1 records that no aggregate layer exists and that **the trigger
+for starting one is a need the star schema cannot serve, not volume**. Visual 5
+is that need.
+
+The honest answer to "how current is this?" is *when the pipeline last ran*, and
+that lives in `raw.ingestion_checkpoints` — which the reporting role deliberately
+cannot read (migration 007). The available alternative, `max(ingested_at)` on the
+facts, answers a different question: **when data last changed**. The upsert only
+writes when a payload differs, so a run that succeeds and correctly finds nothing
+new leaves it untouched.
+
+Measured on 2026-09-17: ingestion ran at 03:06 while the newest data change read
+2026-09-14 — three days apart. A card built on `ingested_at` would have called a
+pipeline stale that had run twenty seconds earlier.
+
+So `rpt_pipeline_freshness` surfaces the signal into `marts` through a tested
+model rather than widening a security boundary to answer one question. It
+needed no new grant: the default privileges in migration 007 already covered
+marts tables that did not exist when they were written.
+
+### All six §6 themes now have a visual
+
+Theme 4 is visual 10, and it is the one the schema was shaped for: `driver_key`
+and `constructor_key` both sit on `fct_results` precisely so "same race, same
+team, different driver" is a self-join on two keys rather than a bridge table.
+
+Its methodological decision is stated on the query: **the record counts only
+races where both drivers were classified.** A teammate who retires on lap 3 is
+not evidence the other was faster, and counting it would make a reliability
+table wear a pace table's name. Points are counted across all races, because
+points are the outcome and reliability is part of it — so a pairing where one
+driver leads the head-to-head and the other leads on points is the interesting
+case, not an inconsistency. Zhou and Bottas in 2024 are exactly that.
+
+Nine rather than the three §10 requires, so no single fact carries the dashboard
+and every mart is used by something: the snapshot facts drive 1, 6 and 7, the
+transaction fact drives 2, 3 and 4, the dimensions alone drive 8 and 9, and 5
+reads the reporting model. Together they demonstrate the star schema being used
+as designed rather than one wide table queried nine ways.
 
 **Visual 2 is the headline.** 50.1% DNF in the 1950s falling to 13.0% in the
 2020s is the clearest evidence the 77-season backfill bought something a

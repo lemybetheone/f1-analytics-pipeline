@@ -1,0 +1,92 @@
+version: 2
+
+models:
+  - name: rpt_pipeline_freshness
+    description: >
+      One row. The dashboard's "data as of" card — how current the warehouse is,
+      and whether ingestion is healthy.
+
+      **The first model in the reporting layer.** ARCHITECTURE §1 records that
+      no aggregate layer exists and that the trigger for starting one is a need
+      the star schema cannot serve. This is that need: the honest answer to "how
+      current is this?" lives in `raw`, which the read-only reporting role
+      deliberately cannot read (migration 007). Surfacing it through a tested
+      model beats widening that grant.
+
+      **Grain: one row.** Not a fact, not a dimension — a single-row status
+      readout, which is why it lives in `reporting/` rather than beside them.
+    data_tests:
+      # The grain is the whole contract here. More than one row and a BI card
+      # silently picks whichever it likes.
+      - dbt_utils.equal_rowcount:
+          arguments:
+            compare_model: ref('rpt_pipeline_freshness')
+    columns:
+      - name: season
+        description: "The latest season present in `dim_race`."
+        data_tests: [not_null]
+
+      - name: rounds_run
+        description: "Rounds raced so far this season."
+        data_tests: [not_null]
+
+      - name: rounds_scheduled
+        description: "Rounds on the calendar. `rounds_run` of these have happened."
+        data_tests: [not_null]
+
+      - name: last_race_date
+        description: "Date of the most recent race run. Null only before a season starts."
+
+      - name: next_race_date
+        description: >
+          Date of the next scheduled race. **Legitimately null once a season is
+          complete** — there is no next race until the following calendar lands.
+
+      - name: last_ingestion_at
+        description: >
+          **The signal to trust.** Latest `updated_at` in
+          `raw.ingestion_checkpoints`, which is never pruned, so it durably
+          answers "when did ingestion last do work".
+        data_tests: [not_null]
+
+      - name: last_api_call_at
+        description: >
+          Latest call in `raw.api_call_log`. That table is pruned to a trailing
+          window on every run, so this answers "when did the pipeline last spend
+          budget" and is null if the last run made no calls. Disagreement with
+          `last_ingestion_at` is informative: calls without checkpoint movement
+          means pages were fetched and nothing landed.
+
+      - name: last_data_change_at
+        description: >
+          When a `fct_results` row last actually changed. **Not a freshness
+          signal**, and the reason this model exists: the upsert only writes when
+          a payload differs, so a successful run that finds nothing new leaves
+          this untouched. Measured 2026-09-17 — the pipeline ran at 03:01 while
+          this still read 2026-09-14, because no race had happened between.
+        data_tests: [not_null]
+
+      - name: failed_scopes
+        description: >
+          Checkpoints reading `failed` — an extract that died mid-run and was
+          never resumed. Invisible in row counts, because the data simply stops
+          being complete without anything erroring. Should be 0.
+        data_tests: [not_null]
+
+      - name: unfinished_scopes
+        description: >
+          Checkpoints still `in_progress`. Nonzero while a run is live; nonzero
+          for a long time means a run was interrupted, which is what happened
+          when Docker stopped mid-run on 2026-09-17.
+        data_tests: [not_null]
+
+      - name: api_calls_last_hour
+        description: "Against the 500/hour budget. Usually 0 between runs."
+        data_tests: [not_null]
+
+      - name: model_built_at
+        description: >
+          `run_started_at` for the dbt build that produced this row. Present so
+          the card can tell "the pipeline has not run" apart from "this model has
+          not been rebuilt" — without it the two look identical on a dashboard.
+        data_tests: [not_null]
