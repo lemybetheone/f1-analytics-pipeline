@@ -91,12 +91,16 @@ enhancement, not MVP.
       and updates nothing.
 - [x] Raw data lands in object storage, partitioned by ingestion date.
 - [x] Warehouse loads from the lake, not from memory.
-- [ ] Staging models exist for every source, each with a tested grain.
-- [ ] A star schema with ≥3 dimensions and ≥2 fact tables.
-- [ ] Data quality tests pass on every model (grain + key integrity minimum).
-- [ ] One orchestrated scheduled run (DAG) that succeeds end to end.
-- [ ] A dashboard answering ≥3 real analytical questions.
-- [ ] README with architecture diagram and a minimal run sequence (§9a).
+- [x] Staging models exist for every source, each with a tested grain. 12 views.
+- [x] A star schema with ≥3 dimensions and ≥2 fact tables. 5 and 4.
+- [x] Data quality tests pass on every model (grain + key integrity minimum).
+      247 dbt nodes, 100% passing.
+- [x] One orchestrated scheduled run (DAG) that succeeds end to end. Airflow,
+      daily; the run of 2026-09-14 ingested a race unattended.
+- [x] A dashboard answering ≥3 real analytical questions. Metabase, 10 visuals
+      over two tabs, covering all six §6 themes.
+- [x] README with architecture diagram and a minimal run sequence (§9a),
+      with dashboard screenshots.
 
 ## 6. Analytical questions the model must answer
 
