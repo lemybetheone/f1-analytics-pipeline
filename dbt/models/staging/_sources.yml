@@ -18,6 +18,36 @@ sources:
       error_after: {count: 7, period: day}
 
     tables:
+      # --- operational: how the pipeline itself is doing ---------------------
+      # Not entity data, and nothing in staging reads them. They are declared
+      # because `rpt_pipeline_freshness` surfaces them into `marts`, which is
+      # the only way the read-only reporting role can see them at all — it has
+      # no grant on `raw` (migration 007) and should not get one.
+      #
+      # Both override the source-level `loaded_at_field`: neither carries
+      # `ingested_at`, so inheriting it would break `dbt source freshness`.
+      - name: api_call_log
+        description: >
+          One row per API call, shared across processes so the 500/hour budget
+          survives process boundaries and restarts (ARCHITECTURE decision 24).
+          **Pruned to a trailing window on each run**, so `max(called_at)` means
+          "when the pipeline last made a call", not a full history.
+        loaded_at_field: called_at
+        columns:
+          - name: called_at
+            data_tests: [not_null]
+
+      - name: ingestion_checkpoints
+        description: >
+          Per-scope extract progress, written after every page lands in the lake
+          (ARCHITECTURE decision 23). **Not pruned**, which makes
+          `max(updated_at)` the durable answer to "when did ingestion last do
+          work" — the signal a freshness indicator actually wants.
+        loaded_at_field: updated_at
+        columns:
+          - name: updated_at
+            data_tests: [not_null]
+
       # --- reference data: complete history, upserted -----------------------
       - name: seasons
         description: "Grain: season. 77 rows, 1950 to 2026."
