@@ -13,19 +13,27 @@
 # those tables: Metabase stores the credential in its own application database,
 # so it should be one that can do nothing but read.
 #
-# THE VOLUME IS THE POINT
-# -----------------------
+# THE APPLICATION DATABASE IS THE POINT
+# -------------------------------------
 # Metabase keeps every saved question, dashboard and setting in an application
-# database of its own — **not** in the warehouse. The default is an embedded H2
-# file *inside the container*, so without the named volume below, `docker
-# compose down` deletes every dashboard ever built here. That is the actual
-# "will this still work next year" risk, and it has nothing to do with
-# licensing.
+# database of its own — **not** in the warehouse. Lose it and every dashboard
+# goes with it.
 #
-# H2 rather than a dedicated Postgres container: Metabase recommends Postgres
-# for production, and this is a single user on one laptop opening it
-# occasionally. A second container to hold a few dozen rows would be structure
-# for its own sake. If this ever became multi-user or hosted, that changes.
+# **Postgres, not H2, and that is a correction.** This originally ran on the
+# embedded H2 default, argued as adequate for a single user on one laptop. That
+# reasoning underweighted the laptop being *closed*: H2 is a file-based database
+# inside the container, and an abrupt stop can leave its identity sequences
+# inconsistent.
+#
+# It took three days to bite. After two unclean Docker shutdowns, saving a
+# question failed with `Unique index or primary key violation: PRIMARY KEY ON
+# PUBLIC.REPORT_DASHBOARDCARD(ID)` — H2 trying to reuse an id that already
+# existed — and a second sequence, `METABASE_TABLE(ID)`, was desynced too. A
+# restart recovered it, because H2 recomputes identity on open. It might not
+# next time, and the failure mode is losing the lot.
+#
+# So Metabase gets a Postgres container of its own, the same pattern Airflow
+# already uses for its metadata. Both volumes below are what must survive.
 #
 # BACKUP
 # ------
@@ -49,8 +57,12 @@ services:
     volumes:
       - metabase_data:/metabase.db
     environment:
-      MB_DB_TYPE: h2
-      MB_DB_FILE: /metabase.db/metabase.db
+      MB_DB_TYPE: postgres
+      MB_DB_HOST: metabase-db
+      MB_DB_PORT: 5432
+      MB_DB_DBNAME: metabase
+      MB_DB_USER: metabase
+      MB_DB_PASS: metabase
 
       # Off. It reports usage back to Metabase, and this is a personal project
       # whose query patterns are nobody else's business.
@@ -67,6 +79,32 @@ services:
       retries: 10
       start_period: 90s
     restart: unless-stopped
+    depends_on:
+      metabase-db:
+        condition: service_healthy
+
+  # Metabase's own metadata. Container-internal: the port is deliberately not
+  # published, so these credentials are unreachable from outside the compose
+  # network — the same position as Airflow's metadata Postgres.
+  metabase-db:
+    image: postgres:16
+    container_name: metabase-db
+    environment:
+      POSTGRES_DB: metabase
+      POSTGRES_USER: metabase
+      POSTGRES_PASSWORD: metabase
+    volumes:
+      - metabase_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metabase -d metabase"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
 
 volumes:
+  # Retained after the move to Postgres: it is the migration source, and the
+  # only copy of anything built before 2026-09-17.
   metabase_data:
+  metabase_db_data:
