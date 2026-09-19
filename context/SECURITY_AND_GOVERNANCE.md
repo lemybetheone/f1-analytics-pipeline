@@ -228,3 +228,40 @@ user with no `DeleteObject`.
 > but publishing them in a public repository invites probing and lets a deleted
 > bucket name be claimed by someone else. The connectivity probe reads them from
 > the environment and prints them locally, which is where they belong.
+
+#### History sweep, 2026-09-19 — one accepted exception
+
+Run before making the repository public. All 82 commits searched, by path and by
+content, for every live secret value and for key-shaped strings.
+
+**No credential has ever been committed.** `PROFILE.md`, `CLAUDE.md`,
+`*.private.md` and `.env` appear in no commit. `WAREHOUSE_PASSWORD`,
+`REPORTING_PASSWORD`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and
+`WAREHOUSE_USER` appear in no commit. No `AKIA…`, `ghp_…`, `sk-…`, `xox…` or
+PEM private key appears in any commit. `.env.example` has held blank
+placeholders in every version, and `dbt/profiles.yml` has only ever used
+`env_var()`.
+
+**The exception:** the **bucket name** appears in 8 historical blobs of this
+file. The rule above was introduced by `e219fea — docs: keep concrete resource
+identifiers out of the repository`, which removed it from the working tree;
+commits before that still carry it, and git history keeps every version.
+
+**Accepted rather than purged**, deliberately:
+
+- It is an identifier, not a credential. Nothing in history grants access to the
+  bucket, which blocks public access and is reached only by a scoped IAM user
+  with no `DeleteObject`.
+- Purging means rewriting all 82 commits, changing every SHA — or deleting and
+  recreating the repository, which destroys **25 pull requests** whose
+  descriptions record the reasoning behind most of the decisions in this project.
+  That history is a more valuable asset than the name of a private bucket is a
+  liability.
+
+**What would change this.** The stated risk is squatting: if the bucket is ever
+deleted, the name is claimable by anyone who has read this history. So the
+bucket must not simply be deleted — it is renamed or replaced first, or retained.
+Renaming it at any point makes the historical mention inert, which is the cheap
+fix whenever it is convenient.
+
+The rule itself stands unchanged for everything written from here on.
