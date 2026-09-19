@@ -13,23 +13,26 @@ flowchart LR
     E -->|dbt| F[marts<br/>5 dimensions · 4 facts]
     B -->|failed records| J[(dead-letter table)]
     B <-->|shared rate budget| K[(api_call_log)]
-    F -.planned.-> G[BI dashboard]
-    L[Airflow] -.planned.-> B
-
-    classDef planned stroke-dasharray: 4 4,color:#888
-    class G,L planned
+    F -->|select, as a read-only role| G[Metabase<br/>10 visuals · 2 tabs]
+    L[Airflow] -->|orchestrates| B
+    L -->|orchestrates| E
 ```
 
-Everything solid above is built and tested. Airflow and the dashboard are the
-remaining phases — see [Project status](#project-status).
+Every box is built, tested and running. The pipeline refreshes itself nightly
+without intervention — see [Project status](#project-status).
 
 | | |
 |---|---|
-| **Fact rows** | 26,070 race results · 34,908 driver standings · 13,624 constructor standings · 590 sprint results |
+| **Fact rows** | 26,092 race results · 34,931 driver standings · 13,635 constructor standings · 590 sprint results |
 | **Coverage** | Every championship round from 1950 to 2026 |
-| **dbt** | 234 nodes, 100% passing — every model declares and tests its grain |
+| **dbt** | 247 nodes, 100% passing — every model declares and tests its grain |
 | **Unit tests** | 58, no network |
 | **Ingestion** | 12 endpoints, idempotent, checkpointed, resumable |
+| **Orchestration** | Airflow, daily, with retries and failure reporting |
+| **Serving** | Metabase, 10 visuals covering all six analytical themes |
+
+_Row counts as of 2026-09-19. They move on their own — the scheduled run ingests
+whatever has been raced since._
 
 ---
 
@@ -79,8 +82,57 @@ finish, so non-starters leave both halves of the fraction. The two definitions
 differ by up to 3.4 points — widest in the 1960s, 48.3% against 44.9% — which is
 why the denominator is stated rather than assumed.
 
-> Dashboard screenshots land with the serving phase. Every figure on this page
-> comes from the committed models and can be reproduced by running them.
+Every figure on this page comes from the committed models and can be reproduced
+by running them.
+
+### The dashboard
+
+Ten visuals over two tabs, because one dashboard serving both purposes serves
+neither — a reviewer wants the seventy-seven-season sweep, someone following the
+championship wants last weekend.
+
+**`Current Season`** — the championship as it stands, refreshed by the nightly
+run:
+
+![Current season tab](docs/images/dashboard-current-season.png)
+
+The first card is the one worth a second look. **`pipeline_last_ran` and
+`data_last_changed` are five days apart**, and that is correct rather than
+broken: the warehouse upsert only writes when a payload actually differs, so a
+run that succeeds and finds nothing new leaves the data untouched. A freshness
+indicator built on "when did a row last change" would call a healthy pipeline
+stale. `rpt_pipeline_freshness` exists to keep those two questions apart.
+
+**`All Time`** — 1950 to 2026:
+
+![All time tab](docs/images/dashboard-all-time.png)
+
+**Reliability by era** is the chart the seven-hour backfill bought. Three modern
+seasons would have produced a single bar at 12.5% and no story at all:
+
+![Reliability by era](docs/images/reliability-by-era.png)
+
+**Every circuit Formula 1 has raced at** — 78 of them across 34 countries. The
+one visual where the scale is felt rather than read:
+
+![Circuit map](docs/images/circuit-map.png)
+
+**Teammate head-to-head** is the visual the schema was shaped for. `driver_key`
+and `constructor_key` both sit on `fct_results` precisely so "same race, same
+team, different driver" is a self-join on two keys rather than a bridge table:
+
+![Teammate head-to-head](docs/images/teammate-head-to-head.png)
+
+The pair is ordered by who won, so the first name in each label always leads.
+Ordering by `driver_key` would have been arbitrary — it is an MD5 hash — and the
+first version of this chart did exactly that, leaving a reader unable to tell
+which stacked segment belonged to whom.
+
+The record counts **only races where both drivers were classified**: a teammate
+who retires on lap 3 is not evidence the other was faster. Points are counted
+across all races, because points are the outcome — so a pairing that leads the
+head-to-head while losing on points is the interesting case, not an
+inconsistency.
 
 ---
 
@@ -94,8 +146,8 @@ why the denominator is stated rather than assumed.
 | Warehouse | PostgreSQL (Supabase) | Free tier, real Postgres, reachable from CI |
 | Transformation | dbt Core | Tests, lineage and documentation live with the models rather than beside them |
 | CI | GitHub Actions | `ruff` and `pytest` on every push |
-| Orchestration | Airflow | *Planned* |
-| Serving | Metabase | *Planned* |
+| Orchestration | Airflow 3.0.2 (Docker) | Daily DAG, per-task retries, failure reporting. LocalExecutor — a queue buys nothing on one machine |
+| Serving | Metabase (Docker, local) | Screenshots below rather than a hosted link: a link nobody maintains is worse than an image that stays true (PRD §8b) |
 
 ---
 
@@ -159,10 +211,10 @@ dimension, not repeated on every fact that references the event.
 | `dim_circuit` | circuit | 79 |
 | `dim_race` | (season, round) | 1,173 |
 | `dim_status` | finishing status | 137 |
-| `fct_results` | (race, driver) | 26,070 |
+| `fct_results` | (race, driver) | 26,092 |
 | `fct_sprint_results` | (race, driver), sprint weekends | 590 |
-| `fct_driver_standings` | (season, round, driver) | 34,908 |
-| `fct_constructor_standings` | (season, round, constructor) | 13,624 |
+| `fct_driver_standings` | (season, round, driver) | 34,931 |
+| `fct_constructor_standings` | (season, round, constructor) | 13,635 |
 
 Dimension row counts include one **Unknown member** each — a sentinel row facts
 coalesce to when a key does not resolve, so an unmatched row is visible rather
@@ -188,7 +240,7 @@ python tasks.py docs                         # then: dbt docs serve --profiles-d
 ```
 
 Design decisions, with the alternatives considered and why they lost, are logged
-in [`context/ARCHITECTURE.md`](context/ARCHITECTURE.md) — 34 entries.
+in [`context/ARCHITECTURE.md`](context/ARCHITECTURE.md) — 41 entries.
 
 ---
 
@@ -232,9 +284,9 @@ committed `pre-push` hook runs the same checks locally.
 |---|---|
 | 0 — Discovery | Complete. Every payload validated against the live API before any table was designed |
 | 1 — Ingestion | Complete. 12 endpoints, full history loaded |
-| 2 — Transformation | Complete. Staging + marts, 234 passing nodes |
-| 3 — Orchestration | In progress. Airflow running in Docker; the ingest → dbt DAG runs end to end. Scheduling and alerting still to come |
-| 4 — Serving & polish | Not started |
+| 2 — Transformation | Complete. 12 staging views, 5 dimensions, 4 facts, 247 passing nodes |
+| 3 — Orchestration | Complete. Airflow in Docker, daily, with retries and failure reporting. Runs unattended |
+| 4 — Serving & polish | Complete. Metabase, 10 visuals over two tabs, all six analytical themes answered |
 
 ---
 
