@@ -328,8 +328,13 @@ is joined instead, to exclude non-starters._
 
 ### Two tabs, not one dashboard
 
-**`Current season`** — visuals 5, 6, 7 and 1 (with `season` defaulted to the
-current year). **`All time`** — visuals 2, 3, 4, 8 and 9.
+**`Current Season`** — visuals 5, 6, 7 and 1 (with `season` defaulted to the
+current year). **`All Time`** — visuals 2, 3, 4, 8, 9 and 10.
+
+Tab names match the dashboard as built, capitalisation included. They were
+specified as `Current season` / `All time` and aligned to what exists on
+2026-09-19 — a tab label is a display choice, and the spec following the
+artefact is cheaper than renaming twice.
 
 One dashboard serving both purposes serves neither: a reviewer wants the
 77-season sweep, someone checking the championship wants last weekend. Splitting

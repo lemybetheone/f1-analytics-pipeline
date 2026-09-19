@@ -83,33 +83,74 @@ tallied as (
     from teammate_races
     group by constructor_key, driver_a_key, driver_b_key
 
+),
+
+named as (
+
+    -- **Order the pair by who won, not by surrogate key.** `driver_a` above is
+    -- simply whoever has the lower `driver_key` — an MD5 hash — so which driver
+    -- lands in which column is effectively random and a reader cannot predict
+    -- it. That is fine for a self-join condition and useless for a chart.
+    --
+    -- Reordering here means the **first name is always the one who leads the
+    -- head-to-head**, which makes a stacked bar readable without a legend
+    -- lookup. Ties break on name so the output is deterministic.
+    select
+        constructors.constructor_name as team,
+        tallied.races_compared        as races_compared,
+
+        case when tallied.driver_a_ahead > tallied.driver_b_ahead
+               or (tallied.driver_a_ahead = tallied.driver_b_ahead
+                   and driver_a.full_name < driver_b.full_name)
+             then driver_a.full_name else driver_b.full_name end  as leader,
+        greatest(tallied.driver_a_ahead, tallied.driver_b_ahead)  as leader_wins,
+
+        case when tallied.driver_a_ahead > tallied.driver_b_ahead
+               or (tallied.driver_a_ahead = tallied.driver_b_ahead
+                   and driver_a.full_name < driver_b.full_name)
+             then driver_b.full_name else driver_a.full_name end  as trailer,
+        least(tallied.driver_a_ahead, tallied.driver_b_ahead)     as trailer_wins,
+
+        case when tallied.driver_a_ahead > tallied.driver_b_ahead
+               or (tallied.driver_a_ahead = tallied.driver_b_ahead
+                   and driver_a.full_name < driver_b.full_name)
+             then tallied.driver_a_points else tallied.driver_b_points end
+                                                                  as leader_points,
+        case when tallied.driver_a_ahead > tallied.driver_b_ahead
+               or (tallied.driver_a_ahead = tallied.driver_b_ahead
+                   and driver_a.full_name < driver_b.full_name)
+             then tallied.driver_b_points else tallied.driver_a_points end
+                                                                  as trailer_points
+
+    from tallied
+    join marts.dim_constructor constructors
+      on constructors.constructor_key = tallied.constructor_key
+    join marts.dim_driver driver_a on driver_a.driver_key = tallied.driver_a_key
+    join marts.dim_driver driver_b on driver_b.driver_key = tallied.driver_b_key
+
 )
 
 select
-    -- A unique x-axis label. `team` alone repeats when a constructor ran more
-    -- than two drivers in a season — RB and Williams both do, in 2024 and 2026
-    -- — and a bar chart keyed on it would silently merge two real pairings.
-    constructors.constructor_name || ': ' ||
-        split_part(driver_a.full_name, ' ', -1) || ' v ' ||
-        split_part(driver_b.full_name, ' ', -1)
-                                    as pairing,
+    -- The label carries the answer, so the chart needs no legend lookup.
+    -- `team` alone would not do: it repeats when a constructor ran more than
+    -- two drivers in a season — RB and Williams both do, in 2024 and 2026 — and
+    -- a bar keyed on it would silently merge two real pairings.
+    named.team || ': ' ||
+        split_part(named.leader,  ' ', -1) || ' ' ||
+        named.leader_wins || '-' || named.trailer_wins || ' ' ||
+        split_part(named.trailer, ' ', -1)               as pairing,
 
-    constructors.constructor_name   as team,
-    driver_a.full_name              as driver_a,
-    driver_b.full_name              as driver_b,
+    named.team                                          as team,
+    named.races_compared                                as races_compared,
 
-    tallied.races_compared          as races_compared,
-    tallied.driver_a_ahead          as driver_a_ahead,
-    tallied.driver_b_ahead          as driver_b_ahead,
+    named.leader                                        as leader,
+    named.leader_wins                                   as leader_wins,
+    named.trailer                                       as trailer,
+    named.trailer_wins                                  as trailer_wins,
 
-    tallied.driver_a_points         as driver_a_points,
-    tallied.driver_b_points         as driver_b_points
+    named.leader_points                                 as leader_points,
+    named.trailer_points                                as trailer_points
 
-from tallied
-join marts.dim_constructor constructors
-  on constructors.constructor_key = tallied.constructor_key
-join marts.dim_driver driver_a on driver_a.driver_key = tallied.driver_a_key
-join marts.dim_driver driver_b on driver_b.driver_key = tallied.driver_b_key
-
-where tallied.races_compared >= {{min_races}}
-order by tallied.races_compared desc, team
+from named
+where named.races_compared >= {{min_races}}
+order by named.races_compared desc, named.team

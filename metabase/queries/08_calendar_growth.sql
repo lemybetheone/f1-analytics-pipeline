@@ -8,11 +8,19 @@
 -- history of the sport in one line. Reliability by era shows the same span but
 -- reads as a trend; this reads as coverage.
 --
--- Two series, deliberately. `scheduled` counts every round on the calendar and
--- `run` counts those that have happened, so the current season shows as an
--- incomplete bar rather than a misleading short one. They are identical for
--- every completed season, which is itself worth seeing: a gap anywhere before
--- the current year would mean `has_been_run` had drifted.
+-- **Combo chart: `scheduled` as bars, `run` as a line.** The mark types are
+-- doing real work. Measured, the two series differ in exactly **1 of 77
+-- seasons** — the current one — so drawn as two lines they overlap invisibly
+-- for the whole span and read as a single line with an unexplained kink at the
+-- right edge. A line over bars tracks them exactly until 2026 and then visibly
+-- drops away, which says "this season is partway through" without a caption.
+--
+-- What `run` is **not** is an integrity check, and an earlier version of this
+-- comment claimed it was — "a gap before the current year would mean
+-- `has_been_run` had drifted". That was hollow: `dim_race.has_been_run` *is*
+-- `race_date <= current_date`, so a past race failing it is arithmetically
+-- impossible. The series earns its place by being readable, not by testing
+-- anything. Correctness assertions belong in dbt, where they can fail a build.
 --
 -- Reads `dim_race` alone — no fact needed. The calendar is a property of the
 -- event dimension, and a season with a scheduled-but-unraced round has no fact

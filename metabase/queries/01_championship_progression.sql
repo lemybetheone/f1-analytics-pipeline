@@ -18,10 +18,13 @@
 -- each round, so the legend is stable: a driver leading at round 3 and
 -- finishing eleventh does not appear and disappear.
 --
--- Metabase variables: {{season}} (Number, default 2024) and {{top_n}} (Number,
--- default 5). Verified as `f1_reporting` before being pasted in — 2024 returns
--- Verstappen on 437, which is the official total the standings reconciliation
--- test checks against.
+-- Metabase variables: {{season}} (Number, default 2026) and {{top_n}} (Number,
+-- default 5). The default is the **current** season because this card sits on
+-- the `Current season` tab; the selector is what makes it historical on demand.
+--
+-- Verified as `f1_reporting` before being pasted in — 2024 returns Verstappen on
+-- 437, which is the official total the standings reconciliation test checks
+-- against, so switching the selector to 2024 is a live correctness check.
 
 with final_round as (
 
