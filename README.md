@@ -301,8 +301,14 @@ This project is non-commercial and will not be monetised.
 Licensing here is deliberately split, because the two halves are not the same
 kind of work:
 
-- **Code** (`ingestion/`, `dbt/`, `discovery/`, `migrations/`, `tests/`) is the
-  author's own and is not an adaptation of the data.
+- **Code** (`ingestion/`, `dbt/`, `discovery/`, `migrations/`, `tests/`,
+  `airflow/`, `metabase/`) is the author's own and is not an adaptation of the
+  data. Released under the **[MIT License](LICENSE)** — the `LICENSE` file
+  covers the code only.
+
+  The distinction matters: MIT permits commercial use, and the *data* does not.
+  A reader who lifts a query and points it at their own warehouse is covered by
+  MIT; one who republishes the F1 data it returns is bound by CC BY-NC-SA.
 - **Data and data derivatives** — the star schema, any committed extract or
   sample payload, **dashboard screenshots**, and published figures — are
   adaptations and inherit **CC BY-NC-SA 4.0**, attributed to Jolpica-F1.

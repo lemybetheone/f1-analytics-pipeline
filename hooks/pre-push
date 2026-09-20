@@ -4,14 +4,15 @@
 #
 # Why this exists
 # ---------------
-# CI is advisory on this repository: blocking a merge on a status check needs
-# branch protection, which GitHub does not offer for private repos on the Free
-# plan. Two pull requests merged with red checks before that was noticed.
+# CI is a required status check on `main` as of 2026-09-20, with enforce_admins
+# on. It was advisory for most of this project's life — branch protection needs
+# a paid plan for private repos, and two pull requests merged red before anyone
+# noticed — which is why this hook exists.
 #
-# A pre-push hook is not equivalent to a required check and should not be
-# described as one — `--no-verify` bypasses it, and a clone that has not run the
-# install command has no hook at all. What it does give is an *earlier* catch:
-# the broken commit never reaches the remote in the first place.
+# It is still worth running. A pre-push hook is not equivalent to a required
+# check and should not be described as one — `--no-verify` bypasses it, and a
+# clone that has not run the install command has no hook at all. What it gives
+# is an *earlier* catch: the broken commit never reaches the remote at all.
 #
 # Install (once per clone):
 #     git config core.hooksPath hooks
