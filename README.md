@@ -240,7 +240,7 @@ python tasks.py docs                         # then: dbt docs serve --profiles-d
 ```
 
 Design decisions, with the alternatives considered and why they lost, are logged
-in [`context/ARCHITECTURE.md`](context/ARCHITECTURE.md) — 41 entries.
+in [`context/ARCHITECTURE.md`](context/ARCHITECTURE.md) — 42 entries.
 
 ---
 
@@ -262,7 +262,7 @@ and error, and the run continues.
 across processes and survives a restart. A fixed hourly window would allow 1,000
 requests in two minutes across a boundary.
 
-**Testing.** 234 dbt nodes and 58 unit tests. Every model declares and tests its
+**Testing.** Every dbt model declares and tests its
 grain. Tests that could not meaningfully fail are treated as noise and left out
 — legitimately nullable columns are documented rather than asserted.
 

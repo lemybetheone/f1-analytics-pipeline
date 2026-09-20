@@ -120,3 +120,30 @@ def test_no_credential_shaped_strings_in_tracked_files() -> None:
                     findings.append(f"{path.relative_to(REPO_ROOT)}: {label}")
 
     assert not findings, "credential-shaped strings found in tracked files:\n" + "\n".join(findings)
+
+
+def test_readme_decision_log_count_matches_architecture() -> None:
+    """The README states how many decisions are logged. Keep it true.
+
+    This exists because it drifted: the README said 41 while the log held 42,
+    the gap opening in the very next commit after the number was written. The
+    count is cheap to verify from the files themselves, so a reader should never
+    be the one who notices.
+
+    Row counts are deliberately *not* guarded this way — those move on their own
+    as the scheduled pipeline ingests, which is why the README stamps them with
+    an as-of date instead. This number only changes when someone changes it.
+    """
+    architecture = (REPO_ROOT / "context" / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    # Decision-log rows open with `| <number> |` in the §7 table.
+    actual = len(re.findall(r"^\| \d+ \|", architecture, re.MULTILINE))
+
+    claimed = re.search(r"ARCHITECTURE\.md\)\s*—\s*(\d+)\s+entries", readme)
+    assert claimed, "README no longer states a decision-log count — update this test"
+
+    assert int(claimed.group(1)) == actual, (
+        f"README claims {claimed.group(1)} decision-log entries, "
+        f"ARCHITECTURE.md holds {actual}"
+    )
