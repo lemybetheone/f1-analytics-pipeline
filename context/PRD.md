@@ -512,9 +512,10 @@ every pull request from Phase 1 rather than at the end.
 > not a gate** — `--no-verify` bypasses it, and a different machine that has not
 > run the install command has no hook at all.
 >
-> **When this becomes a real gate:** when the repository goes public in Phase 4,
-> branch protection becomes available at no cost and `lint-and-test` should be
-> made a required status check on `main`.
+> **This became a real gate on 2026-09-20.** The repository went public, branch
+> protection became available at no cost, and `lint-and-test` is now a required
+> status check on `main` with `enforce_admins` enabled — so it binds the sole
+> maintainer as well. Force pushes and branch deletion are blocked.
 
 **Why it moved:** SECURITY §7 requires pull requests, and the project is solo.
 Self-review catches nothing — the author and reviewer are the same person — so

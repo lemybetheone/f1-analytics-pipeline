@@ -419,11 +419,17 @@ for a reader to discover:
 | sqlfluff | ❌ promised for Phase 2, never adopted |
 | `dbt docs generate` | ❌ not wired up |
 
-**"Must be green to merge" is also aspirational.** Branch protection requires a
-paid plan for private repositories, so CI here is *advisory* — two pull requests
-merged red before that was noticed. The committed `hooks/pre-push` runs the same
-checks earlier as partial compensation; it is not equivalent, since `--no-verify`
-bypasses it. This becomes a real gate when the repository goes public.
+**"Must be green to merge" became true on 2026-09-20.** It was aspirational for
+most of this project's life: branch protection requires a paid plan for *private*
+repositories, so CI was merely *advisory* — two pull requests merged red before
+anyone noticed. Making the repository public removed the cost, and `lint-and-test`
+is now a **required status check on `main`**, with `enforce_admins` on, so the
+rule binds the sole maintainer too. Force pushes and branch deletion are blocked.
+
+The committed `hooks/pre-push` still runs the same checks earlier. It is not a
+substitute and never was — `--no-verify` bypasses it, and a fresh clone that has
+not run `tasks.py setup` has no hook at all — but catching a failure before it
+reaches the remote is cheaper than catching it after.
 
 The dbt step arrived on 2026-09-15, three days after Phase 2 finished. In the
 interim a broken `ref()` would have passed CI — and `tasks.py` carried a comment
