@@ -140,7 +140,9 @@ def test_readme_decision_log_count_matches_architecture() -> None:
     # Decision-log rows open with `| <number> |` in the §7 table.
     actual = len(re.findall(r"^\| \d+ \|", architecture, re.MULTILINE))
 
-    claimed = re.search(r"ARCHITECTURE\.md\)\s*—\s*(\d+)\s+entries", readme)
+    # Punctuation-agnostic on purpose: the sentence has already been reworded
+    # once, and the assertion is about the number, not the dash before it.
+    claimed = re.search(r"ARCHITECTURE\.md\)[^\n]*?(\d+)\s+entries", readme)
     assert claimed, "README no longer states a decision-log count — update this test"
 
     assert int(claimed.group(1)) == actual, (
