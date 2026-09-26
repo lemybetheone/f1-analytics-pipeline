@@ -468,6 +468,7 @@ it and never open a source file. Treat it as a deliverable with a defined shape.
 | **Lap timings (`laps`)** | Measured at ~14,000 backfill calls — 3× the whole rest of the project — and answers no §6 question. Parked 2026-08-02 |
 | ML race/lap prediction | Not a data-engineering signal |
 | Governed semantic layer / NL query interface | Built in the author's professional project over BigQuery instead |
+| **Hosted, always-on scheduling** | The schedule currently holds only while the author's workstation is up ([ARCHITECTURE §8](ARCHITECTURE.md#8-environments)). A hosted runner would fix that by removing Airflow, deleting the one capability Phase 3 exists to demonstrate. Parked 2026-09-27 |
 
 ---
 
