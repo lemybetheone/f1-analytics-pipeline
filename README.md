@@ -18,8 +18,9 @@ flowchart LR
     L -->|orchestrates| E
 ```
 
-Every box is built, tested and running. The pipeline refreshes itself nightly
-without intervention (see [Project status](#project-status)).
+Every box is built, tested and running. The pipeline refreshes itself daily with
+no manual step, for as long as the machine hosting it is up (see
+[Project status](#project-status)).
 
 | | |
 |---|---|
@@ -285,7 +286,7 @@ committed `pre-push` hook runs the same checks locally.
 | 0. Discovery | Complete. Every payload validated against the live API before any table was designed |
 | 1. Ingestion | Complete. 12 endpoints, full history loaded |
 | 2. Transformation | Complete. 12 staging views, 5 dimensions, 4 facts, 247 passing nodes |
-| 3. Orchestration | Complete. Airflow in Docker, daily, with retries and failure reporting. Runs unattended |
+| 3. Orchestration | Complete. Airflow in Docker, daily, with retries and failure reporting. Unattended, though the schedule only holds while the host is up: [ARCHITECTURE §8](context/ARCHITECTURE.md#8-environments) |
 | 4. Serving & polish | Complete. Metabase, 10 visuals over two tabs, all six analytical themes answered |
 
 ---

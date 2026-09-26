@@ -278,6 +278,37 @@ in place of it.
 Configuration is environment-variable driven; **no credentials in code or
 committed config**. See [SECURITY_AND_GOVERNANCE.md](SECURITY_AND_GOVERNANCE.md).
 
+**As deployed, 2026-09-27.** The table above is the target. In practice `prod`
+is Airflow in Docker on the author's own workstation, so the schedule is
+conditional on that machine being awake, and the gap is stated here rather than
+left for a reader to discover.
+
+Docker Desktop *is* the container engine, so closing it stops the scheduler.
+`restart: always` on each service only means "come back when the engine comes
+back"; it does nothing while the engine is off. A sleeping or powered-down
+machine has the same effect, and so does a Docker Desktop that was never
+started after login.
+
+`catchup=False` (decision 38) then makes a missed window permanent, which is
+the correct trade but worth naming. Measured over the thirteen days from the
+first scheduled run to 2026-09-26, six produced a run and seven produced none.
+The six started at 00:21, 03:01, 04:40, 08:26, 10:14 and 17:05, scattered
+across the day because what triggers a run is the scheduler coming back up
+rather than the clock.
+
+No data is lost by a skipped run. Every ingestion task requests the current
+season wholesale rather than a delta, and loads are idempotent, so the next
+successful run picks up whatever was raced during the gap. What is lost is the
+run itself, and with it any guarantee that the warehouse is current at a given
+moment. `rpt_pipeline_freshness` exists so that state is visible rather than
+assumed.
+
+The cheap mitigation is Docker Desktop's "start when you sign in" setting, which
+makes the schedule hold whenever the author is logged in. A genuinely always-on
+schedule would mean a hosted runner and no Airflow, which would delete the one
+capability Phase 3 exists to demonstrate. It is parked in
+[PRD § Parking lot](PRD.md#12-parking-lot) rather than built.
+
 ## 9. Key implementation notes
 
 - **Rate limiting** — respect documented quotas; pace requests deliberately.
