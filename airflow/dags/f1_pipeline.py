@@ -24,6 +24,26 @@ Two safety rails follow from the same fact:
 Daily rather than weekly because results are **adjudicated**: stewards' decisions
 can change a classification days after a race, and a weekly run would miss
 amendments. ~80 calls a day against a 500/hour budget is cheap insurance.
+
+**No `--resume` on any ingest task, and that is load-bearing.** With the flag,
+`extract_and_land` reads the checkpoint and skips any scope already marked
+`complete` (`ingestion/pipeline.py`). Season-scoped entities — results,
+qualifying, sprint — hold *one* checkpoint per season, and it flips to
+`complete` the moment the paginator passes the reported row count. So a single
+full sweep of 2026 marks the season done forever, and a row that landed wrong
+could never be corrected: the pipeline only ever pages forward.
+
+That is not hypothetical. Round 15 of 2026 (Azerbaijan, raced 26 September) was
+published with `grid` as JSON `null` for all 22 drivers, because the source
+attached results before the grid. `not_null_stg_results_grid_position` caught it
+and held the race out of the marts, which is the system working. Recovering it
+meant re-fetching the season from offset 0 — possible *only* because this flag
+is absent. Adding `--resume` here to save a handful of calls would silently make
+every future partial-publish permanent.
+
+`--resume` exists for the backfill, where one scope is thousands of calls and
+losing progress is expensive. The daily season sweep is about ten. Re-paging is
+far cheaper than the class of bug it prevents.
 """
 
 from datetime import datetime, timedelta
@@ -56,6 +76,9 @@ def f1_pipeline():
         bash_command=f"cd {PROJECT} && {PY} -m ingestion.pipeline --all-reference",
     )
 
+    # results, qualifying, sprint. One paginated sweep per season, not per round
+    # — so **this** is the task to clear when a race's results need re-fetching.
+    # No --resume: see the module docstring.
     ingest_season_entities = BashOperator(
         task_id="ingest_season_entities",
         bash_command=(
@@ -64,6 +87,8 @@ def f1_pipeline():
         ),
     )
 
+    # pitstops, driverstandings, constructorstandings. One call per round, so
+    # clearing this task re-fetches standings but *not* results.
     ingest_race_entities = BashOperator(
         task_id="ingest_race_entities",
         bash_command=(
