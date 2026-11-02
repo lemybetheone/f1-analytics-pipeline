@@ -24,16 +24,16 @@ no manual step, for as long as the machine hosting it is up (see
 
 | | |
 |---|---|
-| **Fact rows** | 26,092 race results · 34,931 driver standings · 13,635 constructor standings · 590 sprint results |
+| **Fact rows** | 26,202 race results · 35,047 driver standings · 13,690 constructor standings · 612 sprint results |
 | **Coverage** | Every championship round from 1950 to 2026 |
 | **dbt** | 247 nodes, 100% passing. Every model declares and tests its grain |
-| **Unit tests** | 58, no network |
+| **Unit tests** | 59, no network |
 | **Ingestion** | 12 endpoints, idempotent, checkpointed, resumable |
 | **Orchestration** | Airflow, daily, with retries and failure reporting |
 | **Serving** | Metabase, 10 visuals covering all six analytical themes |
 
-_Row counts as of 2026-09-19. They move on their own, since the scheduled run
-ingests whatever has been raced since._
+_Row counts as of 2026-11-02, after round 19 of 23. They move on their own,
+since the scheduled run ingests whatever has been raced since._
 
 ---
 
@@ -73,7 +73,7 @@ answer only the full backfill makes possible:
 | 1980s | 3,938 | 2,070 | **52.6%** |
 | 2000s | 3,624 | 1,083 | 29.9% |
 | 2010s | 4,283 | 755 | 17.6% |
-| 2020s | 2,906 | 362 | 12.5% |
+| 2020s | 3,016 | 381 | 12.6% |
 
 Half the field failing to finish in the fifties, down to 13% today, with the
 1980s bump where the turbo era belongs.
@@ -93,25 +93,28 @@ reviewer wants the seventy-seven-season sweep, someone following the
 championship wants last weekend.
 
 **`Current Season`**: the championship as it stands, refreshed by the nightly
-run.
+run. This is round 19 of 23, by which point a 119-point lead had settled the
+drivers' title with four rounds still to run.
 
-![Current season tab](docs/images/dashboard-current-season.png)
+![Current season tab](docs/images/dashboard-current-season-2.png)
 
-Look at the first card. **`pipeline_last_ran` and `data_last_changed` are five
-days apart**, and that gap is expected. The warehouse upsert only writes when a
+The first card separates two questions that look like one. Here
+`pipeline_last_ran` is 05:46 and `data_last_changed` is 05:43, three minutes
+apart, because a race was held the day before and there was something new to
+write. Most weeks they sit days apart: the warehouse upsert only writes when a
 payload actually differs, so a run that succeeds and finds nothing new leaves
 the data untouched. A freshness indicator built on "when did a row last change"
-would call a healthy pipeline stale. `rpt_pipeline_freshness` exists to keep
-those two questions apart.
+would call a healthy pipeline stale every week the sport is not racing.
+`rpt_pipeline_freshness` exists to keep the two apart.
 
 **`All Time`**: 1950 to 2026.
 
-![All time tab](docs/images/dashboard-all-time.png)
+![All time tab](docs/images/dashboard-all-time-2.png)
 
 **Reliability by era** is the chart the seven-hour backfill bought. Three modern
-seasons would have produced a single bar at 12.5% and no story at all:
+seasons would have produced a single bar at 12.6% and no story at all:
 
-![Reliability by era](docs/images/reliability-by-era.png)
+![Reliability by era](docs/images/reliability-by-era-2.png)
 
 **Every circuit Formula 1 has raced at**: 78 of them across 34 countries. The
 map carries the scale better than any count could:
@@ -122,7 +125,7 @@ map carries the scale better than any count could:
 and `constructor_key` both sit on `fct_results` precisely so "same race, same
 team, different driver" is a self-join on two keys instead of a bridge table:
 
-![Teammate head-to-head](docs/images/teammate-head-to-head.png)
+![Teammate head-to-head](docs/images/teammate-head-to-head-2.png)
 
 The pair is ordered by who won, so the first name in each label always leads.
 Ordering by `driver_key` would have been arbitrary, since it is an MD5 hash, and
@@ -207,15 +210,15 @@ and repeating it on every fact that references the event would be redundant.
 
 | Model | Grain | Rows |
 |---|---|---|
-| `dim_driver` | driver | 882 |
+| `dim_driver` | driver | 885 |
 | `dim_constructor` | constructor | 215 |
 | `dim_circuit` | circuit | 79 |
 | `dim_race` | (season, round) | 1,173 |
 | `dim_status` | finishing status | 137 |
-| `fct_results` | (race, driver) | 26,092 |
-| `fct_sprint_results` | (race, driver), sprint weekends | 590 |
-| `fct_driver_standings` | (season, round, driver) | 34,931 |
-| `fct_constructor_standings` | (season, round, constructor) | 13,635 |
+| `fct_results` | (race, driver) | 26,202 |
+| `fct_sprint_results` | (race, driver), sprint weekends | 612 |
+| `fct_driver_standings` | (season, round, driver) | 35,047 |
+| `fct_constructor_standings` | (season, round, constructor) | 13,690 |
 
 Dimension row counts include one **Unknown member** each: a sentinel row facts
 coalesce to when a key does not resolve, so an unmatched row is visible instead
